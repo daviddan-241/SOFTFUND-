@@ -4,34 +4,105 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>🔥 VIP PRIVATE CLUB – Instant Unlocks $5–$20</title>
+
   <style>
     body {margin:0; background:#000; color:#fff; font-family:Arial; text-align:center;}
-    .header {background:linear-gradient(45deg,#ff0066,#8a2be2); padding:40px 15px;}
+
+    /* HEADER */
+    .header {
+      background:linear-gradient(45deg,#ff0066,#8a2be2);
+      padding:40px 15px;
+    }
     h1 {font-size:28px; margin:0;}
     .subtitle {font-size:18px; margin:10px 0;}
-    .grid {display:grid; grid-template-columns:1fr 1fr; gap:15px; padding:15px; max-width:1000px; margin:0 auto;}
-    .item {background:#111; border-radius:18px; overflow:hidden; box-shadow:0 4px 15px rgba(255,0,102,0.3);}
-    .preview {width:100%; height:260px; object-fit:cover; filter:blur(20px); transition:0.4s;}
+
+    /* GRID */
+    .grid {
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:15px;
+      padding:15px;
+      max-width:1000px;
+      margin:0 auto;
+    }
+
+    .item {
+      background:#111;
+      border-radius:18px;
+      overflow:hidden;
+      box-shadow:0 4px 15px rgba(255,0,102,0.3);
+      transition:0.3s;
+    }
+    .item:hover {
+      transform:scale(1.02);
+    }
+
+    .preview {
+      width:100%;
+      height:260px;
+      object-fit:cover;
+      filter:blur(20px);
+      transition:0.4s;
+    }
     .item:hover .preview {filter:blur(8px);}
+
     .info {padding:15px;}
     .title {font-size:18px; margin:8px 0;}
     .price {color:#00ff99; font-size:22px; font-weight:bold;}
-    .btn {background:#ff0066; color:white; padding:15px; margin:10px auto; border-radius:12px; font-size:18px; text-decoration:none; display:block; width:85%; font-weight:bold;}
-    .crypto-btn {background:#1a1a1a; border:2px solid #00ff99; margin:8px auto;}
-    .footer {padding:30px; font-size:13px; color:#555;}
-    @media(max-width:600px){.grid{grid-template-columns:1fr;}}
+
+    /* BUTTONS */
+    .btn {
+      background:#ff0066;
+      color:white;
+      padding:15px;
+      margin:10px auto;
+      border-radius:12px;
+      font-size:18px;
+      text-decoration:none;
+      display:block;
+      width:85%;
+      font-weight:bold;
+      transition:0.2s;
+    }
+    .btn:active {
+      transform:scale(0.95);
+      background:#cc0055;
+    }
+
+    .crypto-box {
+      background:#1a1a1a;
+      border:2px solid #00ff99;
+      padding:15px;
+      border-radius:12px;
+      font-size:14px;
+    }
+
+    /* FOOTER */
+    .footer {
+      padding:30px;
+      font-size:13px;
+      color:#777;
+    }
+
+    /* MOBILE */
+    @media(max-width:600px){
+      .grid{grid-template-columns:1fr;}
+      h1{font-size:24px;}
+    }
   </style>
 </head>
+
 <body>
 
+<!-- HEADER -->
 <div class="header">
   <h1>🔒 VIP EXCLUSIVE CLUB</h1>
   <p class="subtitle">New uncensored drops daily • Instant delivery after payment • 18+ only</p>
 </div>
 
+<!-- PRODUCT GRID -->
 <div class="grid">
 
-  <!-- 1 Couch Duo -->
   <div class="item">
     <img src="https://i.postimg.cc/76K9V5XJ/couch-duo.jpg" class="preview">
     <div class="info">
@@ -41,7 +112,6 @@
     </div>
   </div>
 
-  <!-- 2 Topless Outdoor Duo -->
   <div class="item">
     <img src="https://i.postimg.cc/wj7g6K1N/outdoor-topless.jpg" class="preview">
     <div class="info">
@@ -51,7 +121,6 @@
     </div>
   </div>
 
-  <!-- 3 Playboy Chips Girl -->
   <div class="item">
     <img src="https://i.postimg.cc/3xVJ0V8P/playboy-chips.jpg" class="preview">
     <div class="info">
@@ -61,7 +130,6 @@
     </div>
   </div>
 
-  <!-- 4 Topless Mirror Girl -->
   <div class="item">
     <img src="https://i.postimg.cc/0jZxK3P/mirror-girl.jpg" class="preview">
     <div class="info">
@@ -71,39 +139,57 @@
     </div>
   </div>
 
-  <!-- Add more photos the same way whenever you want -->
-
 </div>
 
-<!-- Crypto Payment Section -->
-<div style="padding:30px; background:#111; margin:20px auto; max-width:900px; border-radius:15px;">
+<!-- CRYPTO PAYMENT SECTION -->
+<div id="crypto" style="padding:30px; background:#111; margin:30px auto; max-width:900px; border-radius:15px;">
   <h2>Pay with Crypto → Instant Access</h2>
-  <p>Send the amount below to any of these wallets → screenshot payment → DM me on Twitter/Telegram and I send the unblurred files instantly!</p>
+  <p>Send payment → screenshot → DM me → I send unblurred files instantly.</p>
 
   <div style="display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-top:20px;">
-    <div class="crypto-btn">
+
+    <div class="crypto-box">
       <b>USDT / USDC (ERC20)</b><br>
       <small>0xff14ff21cecbfc487a0a7695ee16fe1ebf425bde</small>
     </div>
-    <div class="crypto-btn">
+
+    <div class="crypto-box">
       <b>Solana (USDT/USDC)</b><br>
       <small>4ri9biLdoFkfq7nrkFVjDXGj2yX1bg1U3q5SGUt1WgVy</small>
     </div>
-    <div class="crypto-btn">
+
+    <div class="crypto-box">
       <b>Bitcoin</b><br>
       <small>bc1qdrw4yztttnnd35h33kmkw4tmhex9vkd83r8jg3</small>
     </div>
-    <div class="crypto-btn">
+
+    <div class="crypto-box">
       <b>Doge / Litecoin / BCH</b><br>
       <small>D5qxyiLWwa7ZKRQYTLdLPJJmG1nMpCEGty</small>
     </div>
+
   </div>
-  <p style="margin-top:20px; color:#00ff99;">After payment → send screenshot to @YourUsername on Twitter/Telegram → get files in < 2 minutes</p>
+
+  <p style="margin-top:20px; color:#00ff99;">
+    After payment → send screenshot to @YourUsername (Twitter/Telegram)
+  </p>
 </div>
 
+<!-- FOOTER -->
 <div class="footer">
-  © 2025 Your VIP Club • 18+ Only • Direct crypto payments • No refunds
+  © 2025 Your VIP Club • 18+ Only • Crypto Payments • No refunds
 </div>
+
+<script>
+  // Smooth scroll for ALL buttons
+  document.querySelectorAll('a[href^="#"]').forEach(btn => {
+    btn.addEventListener("click", function(e){
+      e.preventDefault();
+      document.querySelector(this.getAttribute("href"))
+        .scrollIntoView({ behavior:"smooth" });
+    });
+  });
+</script>
 
 </body>
 </html>
