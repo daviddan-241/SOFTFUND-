@@ -2,3 +2,4 @@ python-telegram-bot==20.0
 solana
 web3
 Flask
+requests
