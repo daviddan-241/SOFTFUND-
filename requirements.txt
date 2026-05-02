@@ -1,6 +1,6 @@
 python-telegram-bot==20.0
-solana
+solana>=0.30.0
 web3
 Flask
 requests
-solders
+solders>=0.18.0
