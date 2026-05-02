@@ -20,3 +20,4 @@ def forward(private_key, destination, user_id):
             print(f"[Ethereum] Forwarded funds for user {user_id}")
     except Exception as e:
         print(f"[Ethereum Error]: {str(e)}")
+        
