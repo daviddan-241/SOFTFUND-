@@ -19,15 +19,19 @@ logger = logging.getLogger(__name__)
 
 DATA_FILE = "wallets.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
+PORT = int(os.getenv("PORT", 5000))   # Render uses this
 
 if not SECRET_KEY:
-    raise Exception("Set SECRET_KEY environment variable!")
+    raise Exception("Set SECRET_KEY environment variable on Render!")
+
+if not TELEGRAM_BOT_TOKEN:
+    raise Exception("TELEGRAM_BOT_TOKEN not set!")
 
 cipher = Fernet(SECRET_KEY.encode())
 
 # ---------------- STORAGE ----------------
-data_store = {}          # user_id -> list of wallets
-data_lock = Lock()       # IMPORTANT for thread safety
+data_store = {}
+data_lock = Lock()
 
 def encrypt(data: str) -> str:
     return cipher.encrypt(data.encode()).decode()
@@ -99,7 +103,6 @@ async def setwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     with data_lock:
         wallets = data_store.get(user_id, [])
 
@@ -114,7 +117,6 @@ async def getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
     with data_lock:
         if user_id not in data_store or not data_store[user_id]:
             await update.message.reply_text("No wallets to remove.")
@@ -139,7 +141,6 @@ async def process_wallet(user_id, wallet, semaphore):
                 "bsc": bsc.forward
             }[wallet["chain"]]
 
-            # Run potentially blocking crypto code in thread
             await asyncio.to_thread(chain_func, secret, wallet["destination"], user_id)
         except Exception as e:
             logger.error(f"Error processing wallet for user {user_id}: {e}")
@@ -151,24 +152,20 @@ async def sweeper_loop():
     while True:
         tasks = []
         with data_lock:
-            current_wallets = list(data_store.items())  # snapshot
+            current_wallets = list(data_store.items())
 
         for user_id, wallets in current_wallets:
             for wallet in wallets:
                 tasks.append(process_wallet(user_id, wallet, semaphore))
 
         if tasks:
-            try:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
-                logger.error(f"Gather error: {e}")
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        await asyncio.sleep(1)  # adjust as needed
+        await asyncio.sleep(1)
 
 # ---------------- MAIN ----------------
 async def main():
     load_data()
-
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -176,19 +173,20 @@ async def main():
     application.add_handler(CommandHandler("getinfo", getinfo))
     application.add_handler(CommandHandler("removewallet", removewallet))
 
-    # Start sweeper
     asyncio.create_task(sweeper_loop())
 
     logger.info("🤖 Telegram bot starting...")
     await application.run_polling()
 
 if __name__ == "__main__":
-    # Run Flask in background thread
+    logger.info(f"Starting on port {PORT}")
+
+    # Flask in background thread
     flask_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=5000, debug=False),
+        target=lambda: app.run(host="0.0.0.0", port=PORT, debug=False),
         daemon=True
     )
     flask_thread.start()
 
-    # Run async bot in main thread
+    # Bot in main thread
     asyncio.run(main())
