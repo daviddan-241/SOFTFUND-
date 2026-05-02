@@ -14,16 +14,18 @@ from config import TELEGRAM_BOT_TOKEN
 
 # ---------------- CONFIG ----------------
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 DATA_FILE = "wallets.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
-PORT = int(os.getenv("PORT", 5000))   # Render uses this
+PORT = int(os.getenv("PORT", 5000))
 
 if not SECRET_KEY:
     raise Exception("Set SECRET_KEY environment variable on Render!")
-
 if not TELEGRAM_BOT_TOKEN:
     raise Exception("TELEGRAM_BOT_TOKEN not set!")
 
@@ -161,11 +163,12 @@ async def sweeper_loop():
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        await asyncio.sleep(1)
+        await asyncio.sleep(1)  # Adjust interval as needed
 
 # ---------------- MAIN ----------------
 async def main():
     load_data()
+    
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -173,20 +176,38 @@ async def main():
     application.add_handler(CommandHandler("getinfo", getinfo))
     application.add_handler(CommandHandler("removewallet", removewallet))
 
+    # Start background sweeper
     asyncio.create_task(sweeper_loop())
 
     logger.info("🤖 Telegram bot starting...")
-    await application.run_polling()
+    
+    await application.initialize()
+    await application.start()
+    
+    # Run polling
+    await application.updater.start_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
+    
+    # Keep the bot running
+    await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
     logger.info(f"Starting on port {PORT}")
 
     # Flask in background thread
     flask_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=PORT, debug=False),
+        target=lambda: app.run(
+            host="0.0.0.0", 
+            port=PORT, 
+            debug=False,
+            use_reloader=False
+        ),
         daemon=True
     )
     flask_thread.start()
 
-    # Bot in main thread
+    # Run the async bot
     asyncio.run(main())
