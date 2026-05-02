@@ -1,9 +1,6 @@
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
-    ConversationHandler, MessageHandler, filters, CallbackQueryHandler
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 import asyncio
 import logging
 import json
@@ -18,25 +15,16 @@ from config import TELEGRAM_BOT_TOKEN
 
 # ---------------- CONFIG ----------------
 app = Flask(__name__)
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DATA_FILE = "wallets.json"
-TX_LOG_FILE = "transactions.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
 PORT = int(os.getenv("PORT", 5000))
 
-if not SECRET_KEY or not TELEGRAM_BOT_TOKEN:
-    raise Exception("Missing SECRET_KEY or TELEGRAM_BOT_TOKEN!")
-
 cipher = Fernet(SECRET_KEY.encode())
-
-# ---------------- STORAGE ----------------
-data_store = {}
-tx_log = []
+data_store = {}          # user_id -> list of wallets
+sweeper_running = True
 data_lock = Lock()
 
 def encrypt(data: str) -> str:
@@ -46,214 +34,168 @@ def decrypt(data: str) -> str:
     return cipher.decrypt(data.encode()).decode()
 
 def load_data():
-    global data_store, tx_log
+    global data_store
     if os.path.exists(DATA_FILE):
         try:
-            with open(DATA_FILE) as f:
+            with open(DATA_FILE, "r") as f:
                 data_store = {int(k): v for k, v in json.load(f).items()}
+            logger.info(f"✅ Loaded {sum(len(v) for v in data_store.values())} wallets")
         except Exception as e:
-            logger.error(f"Load wallets error: {e}")
-
-    if os.path.exists(TX_LOG_FILE):
-        try:
-            with open(TX_LOG_FILE) as f:
-                tx_log = json.load(f)
-        except:
-            pass
+            logger.error(f"Load error: {e}")
 
 def save_data():
     try:
         with data_lock:
             with open(DATA_FILE, "w") as f:
                 json.dump(data_store, f, indent=2)
-            with open(TX_LOG_FILE, "w") as f:
-                json.dump(tx_log[-100:], f, indent=2)
     except Exception as e:
         logger.error(f"Save error: {e}")
-
-def log_transaction(user_id, chain, status):
-    tx_log.append({
-        "time": datetime.utcnow().isoformat(),
-        "user_id": user_id,
-        "chain": chain,
-        "status": status
-    })
-    save_data()
 
 # ---------------- FLASK ----------------
 @app.route("/")
 def home():
-    return "Bot is alive ✅"
-
-# ---------------- STATES ----------------
-CHAIN, SECRET, DESTINATION = range(3)
+    return "Sweeper Bot Running ✅"
 
 def main_menu():
     keyboard = [
-        [InlineKeyboardButton("➕ Add New Wallet", callback_data="add_wallet")],
-        [InlineKeyboardButton("📂 My Wallets", callback_data="my_wallets")],
-        [InlineKeyboardButton("🗑 Remove Last", callback_data="remove_last")],
-        [InlineKeyboardButton("📜 Transactions", callback_data="tx_history")]
+        [InlineKeyboardButton("➕ Add Wallet", callback_data="add")],
+        [InlineKeyboardButton("📋 My Wallets", callback_data="list")],
+        [InlineKeyboardButton("🗑 Remove Last", callback_data="remove")],
+        [InlineKeyboardButton("▶️ Start Sweeper" if not sweeper_running else "⏹ Stop Sweeper", callback_data="toggle")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# ---------------- HANDLERS ----------------
+# ---------------- BOT HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ **Crypto Sweeper Bot**", 
-                                  parse_mode="Markdown", 
-                                  reply_markup=main_menu())
+    await update.message.reply_text("⚡ **Fast Crypto Sweeper Bot**\n\nClick buttons below:", 
+                                  parse_mode="Markdown", reply_markup=main_menu())
 
-async def main_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global sweeper_running
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
 
-    if query.data == "add_wallet":
-        keyboard = [
-            [InlineKeyboardButton("Solana", callback_data="solana")],
-            [InlineKeyboardButton("Ethereum", callback_data="ethereum")],
-            [InlineKeyboardButton("BSC", callback_data="bsc")]
-        ]
-        await query.edit_message_text("**Select Chain:**", parse_mode="Markdown",
-                                    reply_markup=InlineKeyboardMarkup(keyboard))
-        return CHAIN
+    if query.data == "add":
+        await query.edit_message_text(
+            "Send command in this format:\n"
+            "`/add solana YOUR_PRIVATE_KEY_OR_SEED DESTINATION_ADDRESS`\n\n"
+            "Example:\n/add solana ABCdef...123 0x1234567890abcdef...",
+            parse_mode="Markdown"
+        )
+        return
 
-    elif query.data == "my_wallets":
-        await show_wallets(query)
-        return ConversationHandler.END
-    elif query.data == "remove_last":
-        await remove_last(query)
-        return ConversationHandler.END
-    elif query.data == "tx_history":
-        await show_transactions(query)
-        return ConversationHandler.END
+    elif query.data == "list":
+        await list_wallets(query, user_id)
+    elif query.data == "remove":
+        await remove_last_wallet(query, user_id)
+    elif query.data == "toggle":
+        sweeper_running = not sweeper_running
+        status = "🟢 **Started**" if sweeper_running else "⭕ **Stopped**"
+        await query.edit_message_text(f"{status} Sweeper", reply_markup=main_menu())
 
-async def chain_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data["chain"] = query.data
-    await query.edit_message_text(f"✅ Selected **{query.data.upper()}**\n\nSend your Private Key or Seed Phrase:")
-    return SECRET
+async def add_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 3:
+        await update.message.reply_text("Usage: `/add <chain> <secret> <destination>`", parse_mode="Markdown")
+        return
 
-async def receive_secret(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["secret"] = update.message.text.strip()
-    await update.message.reply_text("Now send the **Destination Address**:")
-    return DESTINATION
+    chain = context.args[0].lower()
+    destination = context.args[-1]
+    secret_input = " ".join(context.args[1:-1])
 
-async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    chain = context.user_data["chain"]
-    secret = context.user_data["secret"]
-    dest = update.message.text.strip()
-
-    wallet_type = "seed" if " " in secret else "private_key"
+    if chain not in ["solana", "ethereum", "bsc"]:
+        await update.message.reply_text("Supported chains: solana, ethereum, bsc")
+        return
 
     wallet = {
         "chain": chain,
-        "type": wallet_type,
-        "secret": encrypt(secret),
-        "destination": dest
+        "type": "seed" if len(secret_input.split()) > 1 else "private_key",
+        "secret": encrypt(secret_input),
+        "destination": destination,
+        "active": True
     }
 
+    user_id = update.effective_user.id
     with data_lock:
         data_store.setdefault(user_id, []).append(wallet)
         save_data()
 
-    await update.message.reply_text(
-        f"✅ **Wallet Added!**\nChain: {chain.upper()}\nType: {wallet_type}\nDest: `{dest}`",
-        parse_mode="Markdown",
-        reply_markup=main_menu()
-    )
-    context.user_data.clear()
-    return ConversationHandler.END
+    await update.message.reply_text(f"✅ **{chain.upper()}** wallet added!\n→ {destination}", reply_markup=main_menu())
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.", reply_markup=main_menu())
-    context.user_data.clear()
-    return ConversationHandler.END
-
-# Quick actions
-async def show_wallets(query):
-    user_id = query.from_user.id
+async def list_wallets(query, user_id):
     with data_lock:
         wallets = data_store.get(user_id, [])
     if not wallets:
-        await query.edit_message_text("No wallets yet.", reply_markup=main_menu())
+        await query.edit_message_text("No wallets added yet.", reply_markup=main_menu())
         return
-    text = "📂 **Your Wallets**\n\n"
-    for i, w in enumerate(wallets, 1):
-        text += f"{i}. {w['chain'].upper()} → `{w['destination']}`\n"
+
+    text = "📋 **Your Wallets**\n\n"
+    for i, w in enumerate(wallets):
+        text += f"{i+1}. {w['chain'].upper()} → `{w['destination'][:12]}...`\n"
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu())
 
-async def remove_last(query):
-    user_id = query.from_user.id
+async def remove_last_wallet(query, user_id):
     with data_lock:
         if user_id in data_store and data_store[user_id]:
-            removed = data_store[user_id].pop()
+            data_store[user_id].pop()
             if not data_store[user_id]:
                 del data_store[user_id]
             save_data()
-            await query.edit_message_text(f"🗑 Removed **{removed['chain'].upper()}** wallet", 
-                                        parse_mode="Markdown", reply_markup=main_menu())
+            await query.edit_message_text("🗑 Last wallet removed.", reply_markup=main_menu())
         else:
-            await query.edit_message_text("Nothing to remove.", reply_markup=main_menu())
+            await query.edit_message_text("No wallet to remove.", reply_markup=main_menu())
 
-async def show_transactions(query):
-    user_id = query.from_user.id
-    user_tx = [t for t in tx_log[-15:] if t["user_id"] == user_id]
-    if not user_tx:
-        await query.edit_message_text("No transactions yet.", reply_markup=main_menu())
-        return
-    text = "📜 **Recent Activity**\n\n"
-    for t in reversed(user_tx):
-        text += f"• {t['time'][:19]} | {t['chain'].upper()} | {t['status']}\n"
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=main_menu())
-
-# ---------------- SWEEPER ----------------
+# ---------------- FAST SWEEPER ----------------
 async def sweeper_loop():
-    logger.info("🚀 Sweeper loop started")
-    semaphore = asyncio.Semaphore(10)
+    global sweeper_running
+    logger.info("🚀 Fast Sweeper Loop Started (0.5s interval)")
+    
     while True:
+        if not sweeper_running:
+            await asyncio.sleep(1)
+            continue
+
         tasks = []
         with data_lock:
-            current = list(data_store.items())
-        for uid, wallets in current:
-            for w in wallets:
-                tasks.append(process_wallet(uid, w, semaphore))
+            current_wallets = list(data_store.items())
+
+        for user_id, wallets in current_wallets:
+            for wallet in wallets:
+                if wallet.get("active", True):
+                    tasks.append(process_single_wallet(user_id, wallet))
+
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.sleep(1)
 
-async def process_wallet(user_id, wallet, semaphore):
-    async with semaphore:
-        try:
-            secret = decrypt(wallet["secret"])
-            func = {"solana": solana.forward, "ethereum": ethereum.forward, "bsc": bsc.forward}[wallet["chain"]]
-            await asyncio.to_thread(func, secret, wallet["destination"], user_id)
-            log_transaction(user_id, wallet["chain"], "Success")
-        except Exception as e:
-            log_transaction(user_id, wallet["chain"], f"Failed: {str(e)[:80]}")
+        await asyncio.sleep(0.5)   # Very fast check
+
+async def process_single_wallet(user_id, wallet):
+    try:
+        secret = decrypt(wallet["secret"])
+        chain_func = {
+            "solana": solana.forward,
+            "ethereum": ethereum.forward,
+            "bsc": bsc.forward
+        }[wallet["chain"]]
+
+        # Run the forward function
+        await asyncio.to_thread(chain_func, secret, wallet["destination"], user_id)
+        
+    except Exception as e:
+        logger.error(f"Sweep error for user {user_id}: {e}")
 
 # ---------------- MAIN ----------------
 async def main():
     load_data()
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start),
-                      CallbackQueryHandler(main_button)],
-        states={
-            CHAIN: [CallbackQueryHandler(chain_selected)],
-            SECRET: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_secret)],
-            DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False
-    )
-
-    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("add", add_wallet))
+    application.add_handler(CallbackQueryHandler(button_handler))
 
     asyncio.create_task(sweeper_loop())
 
+    logger.info("🤖 Bot Starting...")
     await application.initialize()
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
