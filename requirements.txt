@@ -3,3 +3,4 @@ solana
 web3
 Flask
 requests
+solders
