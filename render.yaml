@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: sweepbot
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: SECRET_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: SOLANA_RPC_URL
+        value: "https://api.mainnet-beta.solana.com"
+      - key: ETH_RPC_URL
+        value: "https://cloudflare-eth.com"
+      - key: BSC_RPC_URL
+        value: "https://bsc-dataseed.binance.org/"
