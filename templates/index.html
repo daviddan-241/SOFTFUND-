@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Multi-Chain Sweeper Dashboard</title>
+<style>
+  :root {
+    --bg:       #0a0e1a;
+    --surface:  #111827;
+    --surface2: #1a2235;
+    --border:   #1f2e4a;
+    --accent:   #10b981;
+    --accent2:  #3b82f6;
+    --warn:     #f59e0b;
+    --danger:   #ef4444;
+    --sol:      #9945FF;
+    --eth:      #627EEA;
+    --bsc:      #F0B90B;
+    --text:     #f1f5f9;
+    --muted:    #64748b;
+    --card-glow: 0 0 24px rgba(16,185,129,.08);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+  /* HEADER */
+  header{
+    background:var(--surface);border-bottom:1px solid var(--border);
+    padding:0 28px;height:64px;display:flex;align-items:center;justify-content:space-between;
+    position:sticky;top:0;z-index:100;
+  }
+  .logo{display:flex;align-items:center;gap:12px;font-size:1.25rem;font-weight:700;letter-spacing:-.3px}
+  .logo svg{width:32px;height:32px}
+  .header-right{display:flex;align-items:center;gap:12px}
+  .status-badge{
+    display:flex;align-items:center;gap:7px;padding:6px 14px;
+    border-radius:20px;font-size:.82rem;font-weight:600;cursor:pointer;
+    border:1px solid;transition:all .2s;user-select:none;
+  }
+  .status-badge.running{background:rgba(16,185,129,.12);border-color:var(--accent);color:var(--accent)}
+  .status-badge.stopped{background:rgba(239,68,68,.12);border-color:var(--danger);color:var(--danger)}
+  .dot{width:8px;height:8px;border-radius:50%;animation:pulse 2s infinite}
+  .running .dot{background:var(--accent)}
+  .stopped .dot{background:var(--danger);animation:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .btn{
+    display:inline-flex;align-items:center;gap:7px;padding:9px 18px;
+    border-radius:8px;font-size:.875rem;font-weight:600;cursor:pointer;
+    border:none;transition:all .18s;text-decoration:none;
+  }
+  .btn-primary{background:var(--accent);color:#000}
+  .btn-primary:hover{background:#0ea570;transform:translateY(-1px)}
+  .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+  .btn-secondary:hover{background:var(--border)}
+  .btn-danger{background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3)}
+  .btn-danger:hover{background:rgba(239,68,68,.25)}
+  .btn-sm{padding:6px 12px;font-size:.8rem}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
+
+  /* MAIN LAYOUT */
+  main{padding:28px;max-width:1400px;margin:0 auto}
+
+  /* STATS GRID */
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:28px}
+  .stat-card{
+    background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    padding:20px 22px;box-shadow:var(--card-glow);position:relative;overflow:hidden;
+  }
+  .stat-card::before{
+    content:'';position:absolute;top:0;left:0;right:0;height:3px;border-radius:14px 14px 0 0;
+  }
+  .stat-card.green::before{background:var(--accent)}
+  .stat-card.blue::before{background:var(--accent2)}
+  .stat-card.yellow::before{background:var(--warn)}
+  .stat-card.red::before{background:var(--danger)}
+  .stat-card.purple::before{background:var(--sol)}
+  .stat-label{font-size:.78rem;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px}
+  .stat-value{font-size:2rem;font-weight:700;line-height:1;margin-bottom:4px}
+  .stat-sub{font-size:.78rem;color:var(--muted)}
+
+  /* CONTENT GRID */
+  .content-grid{display:grid;grid-template-columns:1fr 380px;gap:20px}
+  @media(max-width:1100px){.content-grid{grid-template-columns:1fr}}
+
+  /* CARD */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:var(--card-glow)}
+  .card-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  .card-title{font-size:.95rem;font-weight:700;display:flex;align-items:center;gap:8px}
+  .card-body{padding:0}
+
+  /* TABLE */
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:.875rem}
+  th{padding:11px 16px;text-align:left;font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border);white-space:nowrap}
+  td{padding:13px 16px;border-bottom:1px solid rgba(31,46,74,.5);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,.02)}
+
+  /* CHAIN BADGE */
+  .chain-badge{
+    display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
+    border-radius:20px;font-size:.75rem;font-weight:700;
+  }
+  .chain-sol{background:rgba(153,69,255,.15);color:var(--sol)}
+  .chain-eth{background:rgba(98,126,234,.15);color:var(--eth)}
+  .chain-bsc{background:rgba(240,185,11,.15);color:var(--bsc)}
+
+  /* STATUS */
+  .status-pill{
+    display:inline-flex;align-items:center;gap:5px;padding:3px 9px;
+    border-radius:20px;font-size:.75rem;font-weight:600;
+  }
+  .pill-active{background:rgba(16,185,129,.15);color:var(--accent)}
+  .pill-paused{background:rgba(100,116,139,.15);color:var(--muted)}
+  .pill-success{background:rgba(16,185,129,.15);color:var(--accent)}
+  .pill-error{background:rgba(239,68,68,.15);color:var(--danger)}
+  .pill-skip{background:rgba(100,116,139,.12);color:var(--muted)}
+
+  /* EMPTY STATE */
+  .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
+  .empty-state svg{width:48px;height:48px;opacity:.3;margin-bottom:14px}
+  .empty-state p{font-size:.9rem}
+
+  /* ACTIVITY LOG */
+  .log-list{max-height:360px;overflow-y:auto}
+  .log-item{
+    padding:12px 20px;border-bottom:1px solid rgba(31,46,74,.4);
+    display:flex;align-items:flex-start;gap:12px;
+  }
+  .log-item:last-child{border-bottom:none}
+  .log-icon{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;margin-top:1px}
+  .log-body{flex:1;min-width:0}
+  .log-title{font-size:.83rem;font-weight:600;margin-bottom:2px}
+  .log-meta{font-size:.75rem;color:var(--muted)}
+  .log-time{font-size:.72rem;color:var(--muted);white-space:nowrap;margin-top:1px}
+
+  /* CHAIN STATUS */
+  .chain-status-list{padding:16px 20px;display:flex;flex-direction:column;gap:10px}
+  .chain-row{display:flex;align-items:center;gap:12px}
+  .chain-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;flex-shrink:0}
+  .chain-details{flex:1}
+  .chain-name{font-size:.875rem;font-weight:700;margin-bottom:2px}
+  .chain-info{font-size:.75rem;color:var(--muted)}
+  .chain-wallets{font-size:.8rem;font-weight:600;color:var(--accent)}
+
+  /* MODAL */
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);
+    z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;
+  }
+  .modal-overlay.open{display:flex}
+  .modal{
+    background:var(--surface);border:1px solid var(--border);border-radius:18px;
+    width:100%;max-width:520px;max-height:90vh;overflow-y:auto;
+    box-shadow:0 24px 64px rgba(0,0,0,.5);
+  }
+  .modal-header{padding:22px 24px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  .modal-title{font-size:1.1rem;font-weight:700}
+  .modal-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.4rem;padding:4px;line-height:1;border-radius:6px}
+  .modal-close:hover{color:var(--text);background:var(--surface2)}
+  .modal-body{padding:22px 24px}
+  .form-group{margin-bottom:18px}
+  .form-label{display:block;font-size:.82rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+  .form-control{
+    width:100%;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);
+    border-radius:9px;color:var(--text);font-size:.9rem;outline:none;transition:border-color .15s;
+    font-family:inherit;
+  }
+  .form-control:focus{border-color:var(--accent)}
+  .form-control::placeholder{color:var(--muted)}
+  select.form-control{cursor:pointer}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .modal-footer{padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+
+  /* TOAST */
+  .toast-container{position:fixed;bottom:24px;right:24px;z-index:2000;display:flex;flex-direction:column;gap:8px}
+  .toast{
+    padding:12px 18px;border-radius:10px;font-size:.875rem;font-weight:600;
+    box-shadow:0 8px 24px rgba(0,0,0,.3);animation:slideIn .25s ease;
+    display:flex;align-items:center;gap:8px;min-width:240px;
+  }
+  .toast-success{background:#064e3b;border:1px solid var(--accent);color:#34d399}
+  .toast-error{background:#450a0a;border:1px solid var(--danger);color:#f87171}
+  .toast-info{background:#1e3a5f;border:1px solid var(--accent2);color:#93c5fd}
+  @keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+
+  /* SPINNER */
+  .spin{display:inline-block;animation:rotate .7s linear infinite}
+  @keyframes rotate{to{transform:rotate(360deg)}}
+
+  /* BALANCE MODAL */
+  .balance-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+  .balance-row:last-child{border-bottom:none}
+  .balance-amount{font-size:1.1rem;font-weight:700}
+
+  /* Action bar */
+  .action-bar{display:flex;gap:10px;flex-wrap:wrap;padding:18px 22px;background:var(--surface2);border-bottom:1px solid var(--border)}
+
+  /* Responsive */
+  @media(max-width:640px){
+    header{padding:0 16px}
+    main{padding:16px}
+    .form-row{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none">
+      <rect width="32" height="32" rx="8" fill="url(#grad)"/>
+      <path d="M9 16l4 4 10-10" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <defs><linearGradient id="grad" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#10b981"/><stop offset="1" stop-color="#3b82f6"/></linearGradient></defs>
+    </svg>
+    SweepBot
+  </div>
+  <div class="header-right">
+    <div class="status-badge running" id="sweeperBadge" onclick="toggleSweeper()" title="Click to toggle">
+      <span class="dot"></span>
+      <span id="sweeperLabel">Auto-Sweep ON</span>
+    </div>
+    <button class="btn btn-secondary btn-sm" onclick="openBalances()">💰 Balances</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Add Wallet</button>
+  </div>
+</header>
+
+<!-- MAIN -->
+<main>
+
+  <!-- STATS -->
+  <div class="stats-grid">
+    <div class="stat-card green">
+      <div class="stat-label">Total Wallets</div>
+      <div class="stat-value" id="statWallets">—</div>
+      <div class="stat-sub">being monitored</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-label">Active Chains</div>
+      <div class="stat-value" id="statChains">—</div>
+      <div class="stat-sub">SOL · ETH · BNB</div>
+    </div>
+    <div class="stat-card yellow">
+      <div class="stat-label">Sweeps Today</div>
+      <div class="stat-value" id="statToday">—</div>
+      <div class="stat-sub" id="statTotalSub">total: —</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Errors Today</div>
+      <div class="stat-value" id="statErrors">—</div>
+      <div class="stat-sub">connection or key issues</div>
+    </div>
+    <div class="stat-card purple">
+      <div class="stat-label">Sweep Interval</div>
+      <div class="stat-value" style="font-size:1.5rem">0.5s</div>
+      <div class="stat-sub">real-time monitoring</div>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content-grid">
+
+    <!-- LEFT: WALLETS TABLE -->
+    <div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h2"/></svg>
+            Monitored Wallets
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="openAddModal()">+ Add Wallet</button>
+        </div>
+        <div class="action-bar">
+          <button class="btn btn-secondary btn-sm" onclick="manualSweepAll()" id="btnSweepAll">
+            ⚡ Sweep All Now
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshAll()">
+            ↺ Refresh
+          </button>
+        </div>
+        <div class="table-wrap" id="walletsWrap">
+          <div class="empty-state" id="walletsEmpty" style="display:none">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h2"/></svg>
+            <p>No wallets added yet.<br>Click <strong>+ Add Wallet</strong> to get started.</p>
+          </div>
+          <table id="walletsTable">
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Chain</th>
+                <th>Destination</th>
+                <th>Status</th>
+                <th>Last Sweep</th>
+                <th>Amount</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="walletsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- HISTORY TABLE -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+            Sweep History
+          </div>
+          <span style="font-size:.78rem;color:var(--muted)">Last 50 events</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Time</th><th>Chain</th><th>Amount</th><th>Destination</th><th>Status</th><th>TX Hash</th></tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No history yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT SIDEBAR -->
+    <div style="display:flex;flex-direction:column;gap:20px">
+
+      <!-- CHAIN STATUS -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Supported Chains
+          </div>
+        </div>
+        <div class="chain-status-list" id="chainStatusList">
+          <div class="chain-row">
+            <div class="chain-icon" style="background:rgba(153,69,255,.15);color:var(--sol)">◎</div>
+            <div class="chain-details">
+              <div class="chain-name">Solana</div>
+              <div class="chain-info">SOL — mainnet-beta</div>
+            </div>
+            <div class="chain-wallets" id="chain-sol-count">0 wallets</div>
+          </div>
+          <div class="chain-row">
+            <div class="chain-icon" style="background:rgba(98,126,234,.15);color:var(--eth)">Ξ</div>
+            <div class="chain-details">
+              <div class="chain-name">Ethereum</div>
+              <div class="chain-info">ETH — mainnet</div>
+            </div>
+            <div class="chain-wallets" id="chain-eth-count">0 wallets</div>
+          </div>
+          <div class="chain-row">
+            <div class="chain-icon" style="background:rgba(240,185,11,.15);color:var(--bsc)">⬡</div>
+            <div class="chain-details">
+              <div class="chain-name">BNB Smart Chain</div>
+              <div class="chain-info">BNB — BSC mainnet</div>
+            </div>
+            <div class="chain-wallets" id="chain-bsc-count">0 wallets</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LIVE ACTIVITY -->
+      <div class="card" style="flex:1">
+        <div class="card-header">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Live Activity
+          </div>
+          <span class="dot" style="background:var(--accent)"></span>
+        </div>
+        <div class="log-list" id="activityLog">
+          <div class="log-item">
+            <div class="log-icon" style="background:rgba(59,130,246,.15);color:var(--accent2)">ℹ</div>
+            <div class="log-body">
+              <div class="log-title">System started</div>
+              <div class="log-meta">Sweeper initializing...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BALANCE CHECKER -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">💰 Balance Checker</div>
+        </div>
+        <div style="padding:16px 18px">
+          <div class="form-group" style="margin-bottom:10px">
+            <select class="form-control" id="balChain">
+              <option value="solana">Solana (SOL)</option>
+              <option value="ethereum">Ethereum (ETH)</option>
+              <option value="bsc">BSC (BNB)</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <input class="form-control" id="balAddress" placeholder="Wallet address..." />
+          </div>
+          <button class="btn btn-secondary" style="width:100%" onclick="checkBalance()">Check Balance</button>
+          <div id="balResult" style="margin-top:10px;font-size:.9rem;text-align:center;color:var(--accent);font-weight:700;min-height:22px"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<!-- ADD WALLET MODAL -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">➕ Add Wallet</div>
+      <button class="modal-close" onclick="closeAddModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Chain</label>
+          <select class="form-control" id="addChain">
+            <option value="solana">◎ Solana (SOL)</option>
+            <option value="ethereum">Ξ Ethereum (ETH)</option>
+            <option value="bsc">⬡ BSC (BNB)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Key Type</label>
+          <select class="form-control" id="addType">
+            <option value="private_key">Private Key</option>
+            <option value="seed_phrase">Seed Phrase</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Wallet Label</label>
+        <input class="form-control" id="addLabel" placeholder="e.g. My ETH Wallet"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Private Key / Seed Phrase</label>
+        <textarea class="form-control" id="addSecret" rows="3"
+          placeholder="Hex private key, comma-separated bytes (Solana), or 12/24-word seed phrase"
+          style="resize:vertical;line-height:1.5"></textarea>
+        <div style="font-size:.73rem;color:var(--muted);margin-top:5px">
+          Your key is encrypted with AES-256 before storage. It is never transmitted in plaintext.
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Destination Address</label>
+        <input class="form-control" id="addDest" placeholder="All funds will be swept to this address"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Your Telegram User ID</label>
+        <input class="form-control" id="addUserId" type="number" placeholder="Get it from @userinfobot on Telegram"/>
+        <div style="font-size:.73rem;color:var(--muted);margin-top:5px">
+          Used to link this wallet to your Telegram account for bot notifications.
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeAddModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="addWallet()" id="btnAddSave">Add Wallet</button>
+    </div>
+  </div>
+</div>
+
+<!-- BALANCES MODAL -->
+<div class="modal-overlay" id="balancesModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">💰 All Wallet Balances</div>
+      <button class="modal-close" onclick="closeBalances()">×</button>
+    </div>
+    <div class="modal-body" id="balancesBody">
+      <div style="text-align:center;padding:20px;color:var(--muted)">Loading balances…</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="closeBalances()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const SYMBOLS = {solana:'SOL', ethereum:'ETH', bsc:'BNB'};
+const CHAIN_CLASS = {solana:'chain-sol', ethereum:'chain-eth', bsc:'chain-bsc'};
+const CHAIN_ICON = {solana:'◎', ethereum:'Ξ', bsc:'⬡'};
+let wallets = [];
+let sweeperRunning = true;
+
+function toast(msg, type='info', dur=3500){
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.textContent = msg;
+  document.getElementById('toastContainer').appendChild(t);
+  setTimeout(()=>t.remove(), dur);
+}
+
+function fmt(ts){ return ts ? ts.slice(0,16) : '—'; }
+function fmtAmt(n){ return n != null ? parseFloat(n).toFixed(6) : '—'; }
+function shortAddr(a){ return a ? a.slice(0,8)+'...'+a.slice(-4) : '—'; }
+
+async function refreshStats(){
+  try{
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    document.getElementById('statWallets').textContent = d.total_wallets;
+    document.getElementById('statChains').textContent = d.active_chains;
+    document.getElementById('statToday').textContent = d.sweeps_today;
+    document.getElementById('statTotalSub').textContent = `total: ${d.total_sweeps}`;
+    document.getElementById('statErrors').textContent = d.errors_today;
+    sweeperRunning = d.sweeper_running;
+    updateSweeperBadge();
+  }catch(e){}
+}
+
+function updateSweeperBadge(){
+  const badge = document.getElementById('sweeperBadge');
+  const label = document.getElementById('sweeperLabel');
+  badge.className = `status-badge ${sweeperRunning ? 'running':'stopped'}`;
+  label.textContent = sweeperRunning ? 'Auto-Sweep ON' : 'Auto-Sweep OFF';
+}
+
+async function refreshWallets(){
+  try{
+    const r = await fetch('/api/wallets');
+    wallets = await r.json();
+    renderWallets();
+  }catch(e){}
+}
+
+function renderWallets(){
+  const tbody = document.getElementById('walletsBody');
+  const empty = document.getElementById('walletsEmpty');
+  const table = document.getElementById('walletsTable');
+  if(!wallets.length){
+    empty.style.display='block';
+    table.style.display='none';
+    return;
+  }
+  empty.style.display='none';
+  table.style.display='table';
+  tbody.innerHTML = wallets.map((w,i)=>`
+    <tr>
+      <td><strong>${escHtml(w.label)}</strong></td>
+      <td><span class="chain-badge ${CHAIN_CLASS[w.chain]}">${CHAIN_ICON[w.chain]} ${SYMBOLS[w.chain]||w.chain.toUpperCase()}</span></td>
+      <td><code style="font-size:.78rem">${shortAddr(w.destination)}</code></td>
+      <td>
+        <span class="status-pill ${w.enabled?'pill-active':'pill-paused'}">
+          ${w.enabled ? '● Active' : '⏸ Paused'}
+        </span>
+      </td>
+      <td style="color:var(--muted);font-size:.82rem">${fmt(w.last_sweep)}</td>
+      <td style="font-size:.82rem;font-weight:600">${w.last_amount ? fmtAmt(w.last_amount)+' '+(SYMBOLS[w.chain]||'') : '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="sweepOne(${w.user_id},${w.index})" title="Sweep this wallet now">⚡</button>
+          <button class="btn btn-secondary btn-sm" onclick="toggleWallet(${w.user_id},${w.index})" title="${w.enabled?'Pause':'Resume'}">${w.enabled?'⏸':'▶'}</button>
+          <button class="btn btn-danger btn-sm" onclick="removeWallet(${w.user_id},${w.index})" title="Remove">✕</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function refreshHistory(){
+  try{
+    const r = await fetch('/api/history?limit=50');
+    const hist = await r.json();
+    const tbody = document.getElementById('historyBody');
+    if(!hist.length){
+      tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No history yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = hist.map(h=>`
+      <tr>
+        <td style="font-size:.78rem;color:var(--muted)">${fmt(h.timestamp)}</td>
+        <td><span class="chain-badge ${CHAIN_CLASS[h.chain]||''}">${CHAIN_ICON[h.chain]||''} ${SYMBOLS[h.chain]||h.chain}</span></td>
+        <td style="font-weight:600">${h.amount ? fmtAmt(h.amount)+' '+(SYMBOLS[h.chain]||'') : '—'}</td>
+        <td><code style="font-size:.75rem">${shortAddr(h.destination)}</code></td>
+        <td><span class="status-pill pill-${h.status==='success'?'success':h.status==='error'?'error':'skip'}">${h.status}</span></td>
+        <td style="font-size:.75rem">${h.tx_hash ? `<a href="${explorerUrl(h.chain,h.tx_hash)}" target="_blank" style="color:var(--accent2);text-decoration:none">${h.tx_hash.slice(0,12)}…</a>` : '—'}</td>
+      </tr>
+    `).join('');
+    updateActivityLog(hist.slice(0,8));
+  }catch(e){}
+}
+
+function explorerUrl(chain, hash){
+  if(chain==='ethereum') return `https://etherscan.io/tx/${hash}`;
+  if(chain==='bsc') return `https://bscscan.com/tx/${hash}`;
+  if(chain==='solana') return `https://solscan.io/tx/${hash}`;
+  return '#';
+}
+
+function updateActivityLog(hist){
+  const log = document.getElementById('activityLog');
+  if(!hist.length) return;
+  const items = hist.map(h=>{
+    const icon = h.status==='success'?'✓':h.status==='error'?'✗':'—';
+    const iconStyle = h.status==='success'?'background:rgba(16,185,129,.15);color:var(--accent)':
+                      h.status==='error'?'background:rgba(239,68,68,.15);color:var(--danger)':
+                      'background:rgba(100,116,139,.12);color:var(--muted)';
+    const sym = SYMBOLS[h.chain]||h.chain;
+    const amt = h.amount ? `${fmtAmt(h.amount)} ${sym}` : sym;
+    return `<div class="log-item">
+      <div class="log-icon" style="${iconStyle}">${icon}</div>
+      <div class="log-body">
+        <div class="log-title">${h.status==='success'?'Swept '+amt:h.status==='error'?'Error on '+sym:'No funds ('+sym+')'}</div>
+        <div class="log-meta">${h.error||('→ '+shortAddr(h.destination))}</div>
+      </div>
+      <div class="log-time">${fmt(h.timestamp)}</div>
+    </div>`;
+  }).join('');
+  log.innerHTML = items || log.innerHTML;
+}
+
+async function refreshChains(){
+  try{
+    const r = await fetch('/api/chains');
+    const d = await r.json();
+    document.getElementById('chain-sol-count').textContent = (d.solana?.wallet_count||0)+' wallets';
+    document.getElementById('chain-eth-count').textContent = (d.ethereum?.wallet_count||0)+' wallets';
+    document.getElementById('chain-bsc-count').textContent = (d.bsc?.wallet_count||0)+' wallets';
+  }catch(e){}
+}
+
+async function toggleSweeper(){
+  try{
+    const r = await fetch('/api/toggle',{method:'POST'});
+    const d = await r.json();
+    sweeperRunning = d.sweeper_running;
+    updateSweeperBadge();
+    toast(sweeperRunning ? '🟢 Auto-sweep enabled' : '🔴 Auto-sweep stopped', sweeperRunning?'success':'info');
+  }catch(e){ toast('Toggle failed','error') }
+}
+
+async function manualSweepAll(){
+  const btn = document.getElementById('btnSweepAll');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin">↺</span> Sweeping...';
+  try{
+    const r = await fetch('/api/sweep',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    const d = await r.json();
+    const successes = (d.results||[]).filter(x=>x.status==='success');
+    toast(`Sweep done: ${successes.length} successful, ${d.count} checked`, 'success', 5000);
+    await refreshAll();
+  }catch(e){ toast('Sweep failed: '+e,'error') }
+  btn.disabled=false;
+  btn.innerHTML='⚡ Sweep All Now';
+}
+
+async function sweepOne(uid, idx){
+  toast('Sweeping wallet...','info');
+  try{
+    const r = await fetch('/api/sweep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid})});
+    const d = await r.json();
+    const ok = (d.results||[]).filter(x=>x.status==='success');
+    toast(ok.length ? `Swept ${ok.map(x=>fmtAmt(x.amount)+' '+(SYMBOLS[x.chain]||x.chain)).join(', ')}` : 'No funds to sweep','success');
+    await refreshAll();
+  }catch(e){ toast('Error: '+e,'error') }
+}
+
+async function toggleWallet(uid, idx){
+  try{
+    const r = await fetch(`/api/wallets/${uid}/${idx}/toggle`,{method:'POST'});
+    const d = await r.json();
+    toast(d.enabled ? 'Wallet resumed' : 'Wallet paused','info');
+    await refreshWallets();
+  }catch(e){ toast('Error','error') }
+}
+
+async function removeWallet(uid, idx){
+  if(!confirm('Remove this wallet? This cannot be undone.')) return;
+  try{
+    await fetch(`/api/wallets/${uid}/${idx}`,{method:'DELETE'});
+    toast('Wallet removed','info');
+    await refreshAll();
+  }catch(e){ toast('Error','error') }
+}
+
+function openAddModal(){ document.getElementById('addModal').classList.add('open') }
+function closeAddModal(){ document.getElementById('addModal').classList.remove('open') }
+
+async function addWallet(){
+  const chain = document.getElementById('addChain').value;
+  const type = document.getElementById('addType').value;
+  const label = document.getElementById('addLabel').value.trim();
+  const secret = document.getElementById('addSecret').value.trim();
+  const dest = document.getElementById('addDest').value.trim();
+  const uid = parseInt(document.getElementById('addUserId').value);
+
+  if(!secret){ toast('Private key or seed phrase required','error'); return; }
+  if(!dest){ toast('Destination address required','error'); return; }
+  if(!uid){ toast('Telegram User ID required','error'); return; }
+
+  const btn = document.getElementById('btnAddSave');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    const r = await fetch('/api/wallets',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chain,type,label:label||`${SYMBOLS[chain]} Wallet`,secret,destination:dest,user_id:uid})
+    });
+    const d = await r.json();
+    if(d.error){ toast(d.error,'error'); return; }
+    toast(`✅ Wallet "${d.label}" added!`,'success');
+    closeAddModal();
+    document.getElementById('addSecret').value='';
+    document.getElementById('addDest').value='';
+    document.getElementById('addLabel').value='';
+    await refreshAll();
+  }catch(e){ toast('Failed: '+e,'error') }
+  btn.disabled=false; btn.textContent='Add Wallet';
+}
+
+async function checkBalance(){
+  const chain = document.getElementById('balChain').value;
+  const address = document.getElementById('balAddress').value.trim();
+  const out = document.getElementById('balResult');
+  if(!address){ out.textContent='Enter an address'; return; }
+  out.innerHTML='<span class="spin">↺</span>';
+  try{
+    const r = await fetch('/api/balance',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chain,address})});
+    const d = await r.json();
+    if(d.error){ out.style.color='var(--danger)'; out.textContent='Error: '+d.error; return; }
+    out.style.color='var(--accent)';
+    out.textContent = `${parseFloat(d.balance).toFixed(8)} ${d.symbol}`;
+  }catch(e){ out.textContent='Error'; }
+}
+
+async function openBalances(){
+  document.getElementById('balancesModal').classList.add('open');
+  const body = document.getElementById('balancesBody');
+  body.innerHTML='<div style="text-align:center;padding:20px;color:var(--muted)">Loading balances…</div>';
+  try{
+    const rw = await fetch('/api/wallets');
+    const ws = await rw.json();
+    if(!ws.length){ body.innerHTML='<p style="color:var(--muted);text-align:center;padding:20px">No wallets added yet.</p>'; return; }
+    const rows = await Promise.all(ws.map(async w=>{
+      try{
+        const r = await fetch(`/api/wallets`);
+        return {wallet:w, bal:null};
+      }catch(e){ return {wallet:w, bal:null}; }
+    }));
+    body.innerHTML = `<div style="margin-bottom:10px;font-size:.82rem;color:var(--muted)">Use the Balance Checker on the right sidebar to check individual addresses.</div>`+
+      ws.map(w=>`
+        <div class="balance-row">
+          <div>
+            <div style="font-weight:700">${escHtml(w.label)}</div>
+            <div style="font-size:.78rem;color:var(--muted)">${shortAddr(w.destination)} (dest)</div>
+          </div>
+          <span class="chain-badge ${CHAIN_CLASS[w.chain]}">${CHAIN_ICON[w.chain]} ${SYMBOLS[w.chain]}</span>
+        </div>
+      `).join('');
+  }catch(e){ body.innerHTML='<p style="color:var(--danger);text-align:center">Error loading wallets</p>'; }
+}
+
+function closeBalances(){ document.getElementById('balancesModal').classList.remove('open'); }
+
+function escHtml(s){ const d=document.createElement('div');d.textContent=s;return d.innerHTML; }
+
+async function refreshAll(){
+  await Promise.all([refreshStats(), refreshWallets(), refreshHistory(), refreshChains()]);
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(el=>{
+  el.addEventListener('click', e=>{ if(e.target===el) el.classList.remove('open'); });
+});
+
+// Initial load + polling
+refreshAll();
+setInterval(refreshAll, 4000);
+</script>
+</body>
+</html>

