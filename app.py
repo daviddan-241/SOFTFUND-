@@ -288,6 +288,7 @@ def api_history():
 
 @app.route("/api/balance", methods=["POST"])
 def api_balance():
+    """Single address balance check — now uses parallel token fetching."""
     body    = request.json or {}
     chain   = body.get("chain", "").lower()
     address = body.get("address", "").strip()
@@ -298,11 +299,69 @@ def api_balance():
         native_bal = mod.get_balance(address)
         balances   = {"native": native_bal, "symbol": CHAIN_SYMBOLS[chain], "tokens": {}}
         if chain in ("ethereum", "bsc"):
-            token_bal = mod.get_all_balances(address)
-            balances["tokens"] = {k: v for k, v in token_bal.items() if k != CHAIN_SYMBOLS[chain]}
+            all_bals = mod.get_all_balances(address)   # parallel inside
+            balances["tokens"] = {k: v for k, v in all_bals.items()
+                                  if k != CHAIN_SYMBOLS[chain] and v > 0}
         return jsonify(balances)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/balances/<int:uid>")
+def api_balances_for_user(uid: int):
+    """
+    Fast parallel balance check for all wallets owned by a user.
+    Returns list of {label, chain, address, native, tokens, no_gas_assets}.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FTE
+    with data_lock:
+        wallets = list(data_store.get(uid, []))
+    if not wallets:
+        return jsonify([])
+
+    def _check_wallet(w):
+        try:
+            secret = decrypt(w["secret"])
+            mod    = CHAIN_MODULES[w["chain"]]
+            chain  = w["chain"]
+            label  = w.get("label", "Wallet")
+            if chain in ("ethereum", "bsc"):
+                from eth_account import Account; Account.enable_unaudited_hdwallet_features()
+                from web3 import Web3
+                acct    = Account.from_mnemonic(secret) if len(secret.split()) >= 12 \
+                          else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
+                address = acct.address
+                all_bals = mod.get_all_balances(address)
+                native   = all_bals.pop(CHAIN_SYMBOLS[chain], 0.0)
+                tokens   = {k: v for k, v in all_bals.items() if v > 0}
+            else:
+                from chains.solana import keypair_from_secret
+                kp      = keypair_from_secret(secret)
+                address = str(kp.pubkey())
+                native  = mod.get_balance(address)
+                tokens  = {}
+            return {"label": label, "chain": chain, "address": address,
+                    "native": native, "symbol": CHAIN_SYMBOLS[chain],
+                    "tokens": tokens, "error": None}
+        except Exception as e:
+            return {"label": w.get("label","?"), "chain": w["chain"],
+                    "address": "", "native": 0, "symbol": "", "tokens": {},
+                    "error": str(e)[:80]}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_check_wallet, w): w for w in wallets}
+        for fut in as_completed(futs, timeout=25):
+            try:
+                results.append(fut.result(timeout=5))
+            except FTE:
+                w = futs[fut]
+                results.append({"label": w.get("label","?"), "chain": w["chain"],
+                                 "error": "Timed out"})
+            except Exception as e:
+                w = futs[fut]
+                results.append({"label": w.get("label","?"), "chain": w["chain"],
+                                 "error": str(e)[:80]})
+    return jsonify(results)
 
 @app.route("/api/chains")
 def api_chains():
@@ -396,27 +455,38 @@ async def main_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             wallets = list(data_store.get(uid, []))
         if not wallets:
             await query.edit_message_text("No wallets to check.", reply_markup=main_kb()); return
-        await query.edit_message_text("⏳ Fetching all token balances...")
-        lines = ["💰 *All Balances*\n"]
-        for w in wallets:
+        await query.edit_message_text("⏳ Checking balances (all chains in parallel)...")
+        async def _bal_line(w):
             try:
                 secret = decrypt(w["secret"])
                 mod    = CHAIN_MODULES[w["chain"]]
-                if w["chain"] in ("ethereum", "bsc"):
+                lbl    = w.get("label", "?")
+                ch     = w["chain"]
+                if ch in ("ethereum", "bsc"):
                     from eth_account import Account; Account.enable_unaudited_hdwallet_features()
                     from web3 import Web3
-                    acct    = Account.from_mnemonic(secret) if len(secret.split()) >= 12 else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
-                    bals    = await asyncio.to_thread(mod.get_all_balances, acct.address)
-                    lines.append(f"*{w.get('label','?')}* [{w['chain'].upper()}]")
-                    for sym, amt in list(bals.items())[:8]:
-                        lines.append(f"  {sym}: `{amt:.6f}`")
+                    acct = Account.from_mnemonic(secret) if len(secret.split()) >= 12 \
+                           else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
+                    bals = await asyncio.wait_for(
+                        asyncio.to_thread(mod.get_all_balances, acct.address), timeout=20)
+                    parts = [f"*{lbl}* [{ch.upper()}]"]
+                    parts += [f"  {s}: `{a:.6f}`" for s, a in list(bals.items())[:10] if a > 0]
+                    if len(parts) == 1:
+                        parts.append("  (no balance)")
+                    return "\n".join(parts)
                 else:
                     from chains.solana import keypair_from_secret
                     kp  = keypair_from_secret(secret)
-                    bal = await asyncio.to_thread(mod.get_balance, str(kp.pubkey()))
-                    lines.append(f"*{w.get('label','?')}* [SOL]: `{bal:.6f} SOL`")
+                    bal = await asyncio.wait_for(
+                        asyncio.to_thread(mod.get_balance, str(kp.pubkey())), timeout=10)
+                    return f"*{lbl}* [SOL]: `{bal:.6f} SOL`"
+            except asyncio.TimeoutError:
+                return f"*{w.get('label','?')}*: Timed out (RPC slow)"
             except Exception as e:
-                lines.append(f"*{w.get('label','?')}*: Error — {str(e)[:40]}")
+                return f"*{w.get('label','?')}*: Error — {str(e)[:50]}"
+        # All wallets checked simultaneously
+        results_bal = await asyncio.gather(*[_bal_line(w) for w in wallets])
+        lines = ["💰 *All Balances*\n"] + list(results_bal)
         await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=main_kb())
 
     elif d == "manual_sweep":
@@ -727,25 +797,37 @@ async def cmd_balances(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         wallets = list(data_store.get(uid, []))
     if not wallets:
         await u.message.reply_text("No wallets.", reply_markup=main_kb()); return
-    msg = await u.message.reply_text("⏳ Fetching balances...")
-    lines = ["💰 *Balances*\n"]
-    for w in wallets:
+    msg = await u.message.reply_text("⏳ Fetching balances (parallel — usually 5-10s)...")
+
+    async def _one(w):
         try:
             secret = decrypt(w["secret"])
             mod    = CHAIN_MODULES[w["chain"]]
-            if w["chain"] in ("ethereum", "bsc"):
+            lbl    = w.get("label", "?")
+            ch     = w["chain"]
+            if ch in ("ethereum", "bsc"):
                 from eth_account import Account; Account.enable_unaudited_hdwallet_features()
                 from web3 import Web3
-                acct = Account.from_mnemonic(secret) if len(secret.split()) >= 12 else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
-                bals = await asyncio.to_thread(mod.get_all_balances, acct.address)
-                lines.append(f"*{w.get('label','?')}*: " + " | ".join(f"{k}:{v:.4f}" for k, v in list(bals.items())[:5]))
+                acct = Account.from_mnemonic(secret) if len(secret.split()) >= 12 \
+                       else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
+                bals = await asyncio.wait_for(
+                    asyncio.to_thread(mod.get_all_balances, acct.address), timeout=20)
+                non_zero = {k: v for k, v in bals.items() if v > 0}
+                if not non_zero:
+                    return f"*{lbl}* [{ch.upper()}]: no balance"
+                return f"*{lbl}* [{ch.upper()}]: " + " | ".join(f"{k}:{v:.4f}" for k, v in list(non_zero.items())[:8])
             else:
                 from chains.solana import keypair_from_secret
                 kp  = keypair_from_secret(secret)
-                bal = await asyncio.to_thread(mod.get_balance, str(kp.pubkey()))
-                lines.append(f"*{w.get('label','?')}*: {bal:.6f} SOL")
+                bal = await asyncio.wait_for(
+                    asyncio.to_thread(mod.get_balance, str(kp.pubkey())), timeout=10)
+                return f"*{lbl}* [SOL]: `{bal:.6f} SOL`"
+        except asyncio.TimeoutError:
+            return f"*{w.get('label','?')}*: Timed out"
         except Exception as e:
-            lines.append(f"*{w.get('label','?')}*: Error — {str(e)[:40]}")
+            return f"*{w.get('label','?')}*: Error — {str(e)[:40]}"
+
+    lines = ["💰 *Balances*\n"] + list(await asyncio.gather(*[_one(w) for w in wallets]))
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 # ─────────────────────────────────────────────
