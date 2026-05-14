@@ -1,5 +1,4 @@
 from flask import Flask, render_template, request, jsonify
-# v2.0 — parallel sweeping, RLock fix, smart gas estimation, live balances
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
