@@ -794,23 +794,42 @@ async function checkBalance(){
 }
 async function loadAllBalances(){
   const el = document.getElementById('allBalances');
-  el.innerHTML='<div class="empty"><div class="empty-text"><span class="spin">↺</span> Loading...</div></div>';
+  el.innerHTML='<div class="empty"><div class="empty-text"><span class="spin">↺</span> Checking on-chain balances...</div></div>';
   try{
-    const wallets = await (await fetch('/api/wallets')).json();
-    if(!wallets.length){ el.innerHTML='<div class="empty"><div class="empty-text">No wallets added yet</div></div>'; return; }
-    el.innerHTML = wallets.map(w=>`
-      <div class="wallet-card" style="margin-bottom:10px">
+    const results = await (await fetch('/api/balances/all')).json();
+    if(!results.length){ el.innerHTML='<div class="empty"><div class="empty-text">No wallets added yet</div></div>'; return; }
+    el.innerHTML = results.map(w=>{
+      const sym = w.symbol || SYM[w.chain] || w.chain;
+      const addrShort = w.address ? w.address.slice(0,10)+'...'+w.address.slice(-6) : '—';
+      const destShort = w.destination ? w.destination.slice(0,10)+'...'+w.destination.slice(-6) : '—';
+      const nativeFmt = w.native != null ? parseFloat(w.native).toFixed(6) : '—';
+      const hasValue  = w.native > 0 || Object.keys(w.tokens||{}).length > 0;
+      const tokenRows = Object.entries(w.tokens||{}).map(([s,a])=>
+        `<div class="bal-row"><span class="bal-sym">${esc(s)}</span><span class="bal-amt">${parseFloat(a).toFixed(6)}</span></div>`
+      ).join('');
+      return `<div class="wallet-card" style="margin-bottom:10px">
         <div class="wallet-header">
           <div>
             <div class="wallet-name">${esc(w.label)}</div>
-            <div class="wallet-dest">${w.destination.slice(0,14)}...${w.destination.slice(-6)}</div>
+            <div class="wallet-dest" title="${w.address||''}">src: ${addrShort}</div>
+            <div class="wallet-dest" style="color:var(--accent)" title="${w.destination||''}">→ ${destShort}</div>
           </div>
-          <span class="badge ${BADGE_CLASS[w.chain]}">${CHAIN_ICON[w.chain]} ${SYM[w.chain]}</span>
+          <span class="badge ${BADGE_CLASS[w.chain]||''}">${CHAIN_ICON[w.chain]||''} ${sym}</span>
         </div>
-        <div style="font-size:.78rem;color:var(--muted)">Use balance checker above to check individual addresses.</div>
-      </div>
-    `).join('');
-  }catch(e){ el.innerHTML='<div class="empty"><div class="empty-text">Error loading</div></div>'; }
+        ${w.error ? `<div style="font-size:.78rem;color:var(--danger);padding:6px 0">⚠ ${esc(w.error)}</div>` : `
+        <div class="bal-result" style="display:block;margin-top:0">
+          <div class="bal-row">
+            <span class="bal-sym" style="display:flex;align-items:center;gap:4px">
+              ${CHAIN_ICON[w.chain]||''} ${sym}
+              ${hasValue ? '<span style="font-size:.68rem;background:rgba(16,185,129,.15);color:var(--accent);padding:1px 6px;border-radius:8px">has funds</span>' : ''}
+            </span>
+            <span class="bal-amt" style="${!hasValue?'color:var(--muted)':''}">${nativeFmt} ${sym}</span>
+          </div>
+          ${tokenRows}
+        </div>`}
+      </div>`;
+    }).join('');
+  }catch(e){ el.innerHTML=`<div class="empty"><div class="empty-text">Error: ${e}</div></div>`; }
 }
 
 // ── SETTINGS ────────────────────────────────

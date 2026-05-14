@@ -26,8 +26,9 @@ app = Flask(__name__)
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATA_FILE    = "wallets.json"
-HISTORY_FILE = "history.json"
+_data_dir    = os.getenv("DATA_DIR", ".")
+DATA_FILE    = os.path.join(_data_dir, "wallets.json")
+HISTORY_FILE = os.path.join(_data_dir, "history.json")
 _raw_key     = os.getenv("SECRET_KEY", "default-sweep-secret-key-2024")
 PORT         = int(os.getenv("PORT", 5000))
 
@@ -361,6 +362,74 @@ def api_balances_for_user(uid: int):
                 w = futs[fut]
                 results.append({"label": w.get("label","?"), "chain": w["chain"],
                                  "error": str(e)[:80]})
+    return jsonify(results)
+
+@app.route("/api/balances/all")
+def api_balances_all():
+    """
+    Fast parallel balance check for ALL wallets across ALL users.
+    Used by the web dashboard's Balance page.
+    Returns list of {label, chain, address, native, symbol, tokens, user_id, error}.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FTE
+
+    all_wallets = []
+    with data_lock:
+        for uid, wallets in data_store.items():
+            for w in wallets:
+                all_wallets.append({**w, "_uid": uid})
+
+    if not all_wallets:
+        return jsonify([])
+
+    def _check(w):
+        uid = w["_uid"]
+        try:
+            secret = decrypt(w["secret"])
+            mod    = CHAIN_MODULES[w["chain"]]
+            chain  = w["chain"]
+            label  = w.get("label", "Wallet")
+            if chain in ("ethereum", "bsc"):
+                from eth_account import Account
+                Account.enable_unaudited_hdwallet_features()
+                acct    = Account.from_mnemonic(secret) if len(secret.split()) >= 12 \
+                          else Account.from_key(secret if secret.startswith("0x") else "0x" + secret)
+                address = acct.address
+                all_bals = mod.get_all_balances(address)
+                native   = all_bals.pop(CHAIN_SYMBOLS[chain], 0.0)
+                tokens   = {k: v for k, v in all_bals.items() if v > 0}
+            else:
+                from chains.solana import keypair_from_secret
+                kp      = keypair_from_secret(secret)
+                address = str(kp.pubkey())
+                native  = mod.get_balance(address)
+                tokens  = {}
+            return {"label": label, "chain": chain, "address": address,
+                    "native": native, "symbol": CHAIN_SYMBOLS[chain],
+                    "destination": w.get("destination",""),
+                    "tokens": tokens, "user_id": uid, "error": None}
+        except Exception as e:
+            return {"label": w.get("label","?"), "chain": w["chain"],
+                    "address": "", "native": 0,
+                    "symbol": CHAIN_SYMBOLS.get(w["chain"],""),
+                    "destination": w.get("destination",""),
+                    "tokens": {}, "user_id": uid, "error": str(e)[:80]}
+
+    results = []
+    workers = min(len(all_wallets) * 2, 12)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(_check, w): w for w in all_wallets}
+        for fut in as_completed(futs, timeout=30):
+            try:
+                results.append(fut.result(timeout=5))
+            except FTE:
+                w = futs[fut]
+                results.append({"label": w.get("label","?"), "chain": w["chain"],
+                                 "error": "Timed out", "native": 0, "tokens": {}})
+            except Exception as e:
+                w = futs[fut]
+                results.append({"label": w.get("label","?"), "chain": w["chain"],
+                                 "error": str(e)[:80], "native": 0, "tokens": {}})
     return jsonify(results)
 
 @app.route("/api/chains")
